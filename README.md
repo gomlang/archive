@@ -156,10 +156,10 @@ permissions are kept traversable while extracting.
 Run from this module:
 
 ```sh
-../../stage2/bin/goml fmt --check
-../../stage2/bin/goml check
-../../stage2/bin/goml test
-GOFLAGS=-race ../../stage2/bin/goml test --target-dir _artifact/race
+../../goml-dev/stage2/bin/goml fmt --check
+../../goml-dev/stage2/bin/goml check
+../../goml-dev/stage2/bin/goml test
+GOFLAGS=-race ../../goml-dev/stage2/bin/goml test --target-dir _artifact/race
 ```
 
 Native GoML tests cover Unicode/PAX metadata, CRC vectors, GZIP corruption,
@@ -174,7 +174,7 @@ output. The codec tests also exchange fixed, dynamic and stored DEFLATE streams
 with `gzip`, exercise concatenated members and optional headers, and reject
 malformed trees and truncated or over-budget data. These four programs must be
 installed. There are no Python helpers.
-The independent `../consumers/archive` module imports version `0.1.0` through the
+The independent `../../goml-dev/ecosystem/consumers/archive` module imports version `0.1.0` through the
 isolated verification registry.
 
 Format references: [PKWARE ZIP APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT),
