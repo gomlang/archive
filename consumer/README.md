@@ -7,6 +7,6 @@ and exercises the tar.gz convenience API.
 Both the consumer and archive dependency use pure GoML without a `go.mod` or Go
 adapter sources.
 
-Run `just ecosystem-test archive` from the repository root to create an isolated
+Run `(cd ../../verification && just ecosystem-test archive)` from the repository root to create an isolated
 registry snapshot and validate the library and consumer. With that snapshot's
 `GOML_HOME`, run `../../../stage2/bin/goml run` or `goml test` here.

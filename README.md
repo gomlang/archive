@@ -174,7 +174,7 @@ output. The codec tests also exchange fixed, dynamic and stored DEFLATE streams
 with `gzip`, exercise concatenated members and optional headers, and reject
 malformed trees and truncated or over-budget data. These four programs must be
 installed. There are no Python helpers.
-The independent `../../goml-dev/ecosystem/consumers/archive` module imports version `0.1.0` through the
+The independent `consumer` module imports version `0.1.0` through the
 isolated verification registry.
 
 Format references: [PKWARE ZIP APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT),
