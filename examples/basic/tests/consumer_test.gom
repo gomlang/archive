@@ -1,6 +1,6 @@
 package tests;
 
-use consumer::archive as example;
+use ecosystem::archive::examples::basic as example;
 use ecosystem::archive;
 use std::testing;
 

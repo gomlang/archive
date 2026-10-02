@@ -174,8 +174,8 @@ output. The codec tests also exchange fixed, dynamic and stored DEFLATE streams
 with `gzip`, exercise concatenated members and optional headers, and reject
 malformed trees and truncated or over-budget data. These four programs must be
 installed. There are no Python helpers.
-The independent `consumer` module imports version `0.1.0` through the
-isolated verification registry.
+The `examples/basic` example builds and reads archive bundles through the public API.
+`goml verify` also tests it through an isolated registry snapshot.
 
 Format references: [PKWARE ZIP APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT),
 [GNU TAR USTAR description](https://www.gnu.org/software/tar/manual/html_node/Standard.html),
@@ -186,3 +186,15 @@ Format references: [PKWARE ZIP APPNOTE](https://pkware.cachefly.net/webdocs/case
 The fallback follows the directory-descriptor approach used by
 [Go 1.26 os.Root](https://cs.opensource.google/go/go/+/refs/tags/go1.26.0:src/os/root_openat.go),
 with archive symlinks and parent traversal rejected outright.
+
+## Development and examples
+
+Requires GoML 0.1.55 or newer. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
+
+```sh
+goml run --example basic
+goml test
+goml verify --timeout 300s
+```
+
+`goml test` builds the example and runs its tests. `goml verify` repeats the example checks as an independent module against an isolated registry snapshot. `(cd ../verification && just ecosystem-test archive)` also retains the library-specific smoke and compatibility checks.
