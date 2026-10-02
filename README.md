@@ -143,7 +143,9 @@ permissions are kept traversable while extracting.
   codepage names, TAR devices/FIFOs and GNU sparse extensions produce
   recoverable errors.
 - PAX numeric fields support nonnegative values; modification fractions are
-  reduced to whole seconds. ZIP writing supports unsigned 32-bit Unix seconds;
+  reduced to whole seconds. A PAX modification time must contain decimal whole
+  seconds, optionally followed by a period and one or more decimal fractional
+  digits; empty fractions, repeated periods and non-digit suffixes are rejected. ZIP writing supports unsigned 32-bit Unix seconds;
   decoding ZIP entries without extended timestamps currently yields zero.
 - `TarReader::next_header` and `read_body_chunk` stream entry bodies within
   limits; calling `next_header` again skips any unread body. `TarReader::next`,

@@ -727,8 +727,31 @@ impl[R: Read] TarReader[R] {
                         size = decimal(value)?;
                     },
                     "mtime" => {
-                        let pieces = value.split(".");
-                        let whole = decimal(pieces[0])?;
+                        let mut point = value.byte_len();
+                        for index in 0..value.byte_len() {
+                            let digit = value.byte_get(index);
+                            if digit == 46 && point == value.byte_len() {
+                                point = index;
+                            } else if digit < 48 || digit > 57 {
+                                return Result::Err(
+                                    failure(
+                                        ErrorKind::Invalid,
+                                        self.offset.get(),
+                                        "invalid PAX timestamp",
+                                    ),
+                                )
+                            }
+                        }
+                        if point == 0 || point + 1 == value.byte_len() {
+                            return Result::Err(
+                                failure(
+                                    ErrorKind::Invalid,
+                                    self.offset.get(),
+                                    "invalid PAX timestamp",
+                                ),
+                            )
+                        }
+                        let whole = decimal(value.byte_slice(0, point))?;
                         if whole > 9223372036854775807 {
                             return Result::Err(
                                 failure(ErrorKind::Invalid, self.offset.get(), "timestamp overflow"),
