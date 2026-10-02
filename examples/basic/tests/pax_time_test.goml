@@ -1,0 +1,81 @@
+package tests;
+
+use ecosystem::archive;
+use std::bytes;
+use std::io;
+use std::testing;
+
+fn pax_time_fixture(value: string) -> bytes::Bytes {
+    let entry = archive::Entry {
+        header: archive::Header {
+            pax: Vec::from_array([("xtime", value)]),
+            ..archive::Header::file("time"),
+        },
+        data: bytes::Bytes::from_string("body"),
+    };
+    let wire = testing::expect_ok(
+        archive::encode_tar(Vec::from_array([entry]), archive::Limits::standard()),
+        "PAX fixture",
+    );
+    let marker = b" xtime=";
+    for at in 512..1024 - marker.len() {
+        if wire.slice(at, at + marker.len()).to_vec() == marker {
+            wire.set(at + 1, b'm');
+            return wire
+        }
+    }
+    testing::assert(false);
+    wire
+}
+
+#[test]
+fn pax_mtime_validates_all_fraction_digits_before_reducing_to_seconds() -> () {
+    for (text, seconds) in Vec::from_array(
+        [
+            ("0", 0.to_i64()),
+            ("001.000", 1),
+            ("42.12345678901234567890123456789", 42),
+            ("9223372036854775807.999", 9223372036854775807),
+        ],
+    ) {
+        let wire = pax_time_fixture(text);
+        let decoded = testing::expect_ok(
+            archive::decode_tar(wire, archive::Limits::standard()),
+            "valid time",
+        );
+        testing::assert_eq(decoded[0].header.modified, seconds);
+        testing::assert(decoded[0].data.to_vec() == b"body");
+    }
+    for text in Vec::from_array(
+        [
+            "",
+            ".1",
+            "1.",
+            "1.foo",
+            "1.2.3",
+            "1..2",
+            "1.2x",
+            "1. 2",
+            "1.2\n",
+            "-1.2",
+            "+1.2",
+            "9223372036854775808.0",
+        ],
+    ) {
+        let source = io::Cursor::new(pax_time_fixture(text));
+        let reader = testing::expect_ok(
+            archive::TarReader::new(source, archive::Limits::standard()),
+            "reader",
+        );
+        testing::assert_eq(
+            testing::expect_err(reader.next_header(), "invalid time").kind,
+            archive::ErrorKind::Invalid,
+        );
+        let consumed = source.position();
+        testing::assert_eq(
+            testing::expect_err(reader.next_header(), "terminal reader").kind,
+            archive::ErrorKind::Closed,
+        );
+        testing::assert_eq(source.position(), consumed);
+    }
+}
