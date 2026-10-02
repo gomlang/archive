@@ -84,7 +84,11 @@ base-256 numeric fields are decoded; writing uses PAX when strings or IDs do
 not fit USTAR. TAR supports files, directories, symbolic links and hard links. ZIP
 supports files, directories and Unix symbolic-link entries, Stored and Deflate,
 UTF-8 names, extended Unix timestamps, archive/file comments, and both signed and
-unsigned classic data descriptors. ZIP directory ranges are checked in sorted
+unsigned classic data descriptors. Descriptor parsing also accepts an unsigned
+descriptor whose CRC32 equals the optional `0x08074b50` signature: the checksum
+and sizes are matched against the directory before choosing a signed or unsigned
+layout, for both classic and ZIP64 descriptors and both indexing APIs.
+ZIP directory ranges are checked in sorted
 order to reject overlapping entries without quadratic pairwise validation.
 
 `Limits` bounds entries, individual expanded bytes, total expanded bytes,

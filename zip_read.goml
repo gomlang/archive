@@ -231,11 +231,22 @@ fn zip_descriptor(data: bytes::Bytes, offset: isize, limit: isize, record: ZipRe
     Error,
 ] {
     let signature = le(data, offset, 4)?;
-    let position = if signature == 0x08074b50 {
-        offset + 4
-    } else {
-        offset
-    };
+    if signature == 0x08074b50 {
+        let signed = zip_descriptor_fields(data, offset + 4, limit, record, zip64);
+        if signed.is_ok() || record.checksum != 0x08074b50 {
+            return signed
+        }
+    }
+    zip_descriptor_fields(data, offset, limit, record, zip64)
+}
+
+fn zip_descriptor_fields(
+    data: bytes::Bytes,
+    position: isize,
+    limit: isize,
+    record: ZipRecord,
+    zip64: bool,
+) -> Result[isize, Error] {
     let width = if zip64 {
         8
     } else {
