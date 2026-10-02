@@ -14,7 +14,7 @@ pub fn exercise() -> Result[(), archive::Error] {
                 bytes::Bytes::from_string("[module]\npath = \"demo\"\n"),
             ),
             archive::Entry::file(
-                "project/main.gom",
+                "project/main.goml",
                 bytes::Bytes::from_string("fn main() -> () { println(\"hello\"); }\n"),
             ),
         ],

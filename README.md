@@ -13,7 +13,7 @@ use std::bytes;
 
 let entries = Vec::from_array([
     archive::Entry::directory("project/"),
-    archive::Entry::file("project/main.gom", bytes::Bytes::from_string("hello")),
+    archive::Entry::file("project/main.goml", bytes::Bytes::from_string("hello")),
 ]);
 let limits = archive::Limits::standard();
 let packed = archive::encode_zip(entries, archive::Compression::Deflate, limits)?;
@@ -189,7 +189,7 @@ with archive symlinks and parent traversal rejected outright.
 
 ## Development and examples
 
-Requires GoML 0.1.55 or newer. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
+Requires GoML 0.1.56 or newer. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
 
 ```sh
 goml run --example basic
