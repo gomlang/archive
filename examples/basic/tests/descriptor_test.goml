@@ -1,0 +1,144 @@
+package tests;
+
+use ecosystem::archive;
+use std::bytes;
+use std::io;
+use std::testing;
+
+fn descriptor_put(data: bytes::Bytes, offset: isize, value: u64, width: isize) -> () {
+    for index in 0..width {
+        data.set(offset + index, (value >> (index * 8).to_u64()).to_u8());
+    }
+}
+
+fn descriptor_get(data: bytes::Bytes, offset: isize, width: isize) -> isize {
+    let mut value: u64 = 0;
+    for index in 0..width {
+        value |= data.get(offset + index).to_u64() << (index * 8).to_u64();
+    }
+    value.to_isize()
+}
+
+fn descriptor_fixture(signed: bool, wide: bool) -> bytes::Bytes {
+    let payload = bytes::Bytes::from_vec(Vec::from_array([172.to_u8(), 10, 122, 213]));
+    testing::assert_eq(archive::crc32(payload), 0x08074b50.to_u32());
+    let original = testing::expect_ok(
+        archive::encode_zip(
+            Vec::from_array([archive::Entry::file("collision", payload)]),
+            archive::Compression::Stored,
+            archive::Limits::standard(),
+        ),
+        "ZIP fixture",
+    );
+    let central = descriptor_get(original, original.len() - 6, 4);
+    let width = if wide {
+        8
+    } else {
+        4
+    };
+    let length = 4 + width * 2
+        + if signed {
+            4
+        } else {
+            0
+        };
+    let data = bytes::Bytes::from_slice_copy(original.slice(0, central));
+    for _ in 0..length {
+        data.push(0);
+    }
+    data.extend_from_slice(original.slice(central, original.len()));
+    let descriptor = central
+        + if signed {
+            4
+        } else {
+            0
+        };
+    if signed {
+        descriptor_put(data, central, 0x08074b50, 4);
+    }
+    descriptor_put(data, descriptor, 0x08074b50, 4);
+    descriptor_put(data, descriptor + 4, 4, width);
+    descriptor_put(data, descriptor + 4 + width, 4, width);
+    descriptor_put(
+        data,
+        4,
+        if wide {
+            45
+        } else {
+            20
+        },
+        2,
+    );
+    descriptor_put(
+        data,
+        central + length + 6,
+        if wide {
+            45
+        } else {
+            20
+        },
+        2,
+    );
+    descriptor_put(data, 6, 0x0808, 2);
+    descriptor_put(data, 14, 0, 4);
+    descriptor_put(
+        data,
+        18,
+        if wide {
+            4294967295
+        } else {
+            0
+        },
+        4,
+    );
+    descriptor_put(
+        data,
+        22,
+        if wide {
+            4294967295
+        } else {
+            0
+        },
+        4,
+    );
+    descriptor_put(data, central + length + 8, 0x0808, 2);
+    descriptor_put(data, data.len() - 6, (central + length).to_u64(), 4);
+    data
+}
+
+#[test]
+fn both_indexes_disambiguate_signature_valued_crc_in_classic_and_zip64_descriptors() -> () {
+    for signed in Vec::from_array([false, true]) {
+        for wide in Vec::from_array([false, true]) {
+            let data = descriptor_fixture(signed, wide);
+            let index = testing::expect_ok(
+                archive::ZipArchive::open(data, archive::Limits::standard()),
+                "memory index",
+            );
+            let source = testing::expect_ok(
+                archive::ZipSource::open(
+                    io::Cursor::new(data),
+                    data.len(),
+                    archive::Limits::standard(),
+                ),
+                "source index",
+            );
+            let entry = testing::expect_ok(index.entry(0), "memory entry");
+            testing::assert(
+                testing::expect_ok(source.entry(0), "source entry").data.to_vec()
+                    == entry.data.to_vec(),
+            );
+            testing::assert_eq(archive::crc32(entry.data), 0x08074b50.to_u32());
+            let central = descriptor_get(data, data.len() - 6, 4);
+            data.set(central - 1, data.get(central - 1) ^ 1);
+            testing::assert_err(archive::ZipArchive::open(data, archive::Limits::standard()));
+            testing::assert_err(
+                archive::ZipSource::open(
+                    io::Cursor::new(data),
+                    data.len(),
+                    archive::Limits::standard(),
+                ),
+            );
+        }
+    }
+}
