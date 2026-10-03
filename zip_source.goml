@@ -179,6 +179,21 @@ pub struct ZipSource[R] {
 
 impl[R: ReadAt] ZipSource[R] {
     pub fn open(reader: R, size: isize, limits: Limits) -> Result[ZipSource[R], Error] {
+        ZipSource::open_timestamp(reader, size, limits, Option::None)
+    }
+
+    pub fn open_with_dos_offset(reader: R, size: isize, limits: Limits, offset_seconds: i64) -> Result[
+        ZipSource[R],
+        Error,
+    ] {
+        validate_dos_offset(offset_seconds)?;
+        ZipSource::open_timestamp(reader, size, limits, Option::Some(offset_seconds))
+    }
+
+    fn open_timestamp(reader: R, size: isize, limits: Limits, dos_offset: Option[i64]) -> Result[
+        ZipSource[R],
+        Error,
+    ] {
         limits.validate()?;
         let directory = zip_directory_at(reader, size, limits)?;
         let central = zip_at(reader, directory.start, directory.end - directory.start, size)?;
@@ -187,7 +202,7 @@ impl[R: ReadAt] ZipSource[R] {
         let mut offset = 0;
         let mut total = 0;
         for _ in 0..directory.count {
-            let parsed = zip_central(central, offset, central.len(), limits)?;
+            let parsed = zip_central(central, offset, central.len(), limits, dos_offset)?;
             if parsed.record.size > limits.max_total_bytes - total {
                 return Result::Err(failure(ErrorKind::Limit, offset, "ZIP expanded size limit"))
             }

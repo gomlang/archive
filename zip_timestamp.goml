@@ -1,0 +1,64 @@
+package archive;
+
+fn validate_dos_offset(offset_seconds: i64) -> Result[(), Error] {
+    if offset_seconds < -86399 || offset_seconds > 86399 {
+        Result::Err(
+            failure(
+                ErrorKind::Invalid,
+                0,
+                "DOS UTC offset must be between -86399 and 86399 seconds",
+            ),
+        )
+    } else {
+        Result::Ok(())
+    }
+}
+
+fn dos_leap(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+fn dos_month_days(year: i64, month: i64) -> i64 {
+    match month {
+        2 => if dos_leap(year) {
+            29
+        } else {
+            28
+        },
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn zip_dos_timestamp(date: u64, time: u64, zone: i64, offset: isize) -> Result[i64, Error] {
+    let year = 1980 + (date >> 9).to_i64();
+    let month = ((date >> 5) & 15).to_i64();
+    let day = (date & 31).to_i64();
+    let hour = (time >> 11).to_i64();
+    let minute = ((time >> 5) & 63).to_i64();
+    let second = ((time & 31) * 2).to_i64();
+    if month < 1 || month > 12 || day < 1 || day > dos_month_days(year, month) || hour > 23
+        || minute > 59
+        || second > 59 {
+        return Result::Err(
+            failure(ErrorKind::Invalid, offset, "invalid DOS modification date or time"),
+        )
+    }
+    let mut days: i64 = 3652;
+    let mut current: i64 = 1980;
+    while current < year {
+        days += if dos_leap(current) {
+            366
+        } else {
+            365
+        };
+        current += 1;
+    }
+    let mut current: i64 = 1;
+    while current < month {
+        days += dos_month_days(year, current);
+        current += 1;
+    }
+    days += day - 1;
+    Result::Ok(days * 86400 + hour * 3600 + minute * 60 + second - zone)
+}

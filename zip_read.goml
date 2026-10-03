@@ -150,10 +150,13 @@ fn zip_kind(name: string, mode: u32) -> Result[EntryKind, Error] {
     Result::Err(failure(ErrorKind::Unsupported, 0, "unsupported ZIP Unix file type"))
 }
 
-fn zip_central(data: bytes::Bytes, offset: isize, end: isize, limits: Limits) -> Result[
-    ParsedZip,
-    Error,
-] {
+fn zip_central(
+    data: bytes::Bytes,
+    offset: isize,
+    end: isize,
+    limits: Limits,
+    dos_offset: Option[i64],
+) -> Result[ParsedZip, Error] {
     if offset > end || end - offset < 46 {
         return Result::Err(failure(ErrorKind::Truncated, offset, "truncated ZIP directory entry"))
     }
@@ -192,7 +195,14 @@ fn zip_central(data: bytes::Bytes, offset: isize, end: isize, limits: Limits) ->
     }
     let path = zip_name(part(data, offset + 46, name_len)?, flags)?;
     let extra = part(data, offset + 46 + name_len, extra_len)?;
-    let modified = zip_extra(extra, 0)?;
+    let extended = zip_extra(extra, -1)?;
+    let modified = if extended >= 0 {
+        extended
+    } else if let Some(zone) = dos_offset {
+        zip_dos_timestamp(le(data, offset + 14, 2)?, le(data, offset + 12, 2)?, zone, offset + 12)?
+    } else {
+        0
+    };
     let comment = text(part(data, offset + 46 + name_len + extra_len, comment_len)?)?;
     let mode = (le(data, offset + 38, 4)? >> 16).to_u32();
     let kind = zip_kind(path, mode)?;

@@ -459,6 +459,21 @@ impl ZipArchive {
     }
 
     pub fn open(data: bytes::Bytes, limits: Limits) -> Result[ZipArchive, Error] {
+        ZipArchive::open_timestamp(data, limits, Option::None)
+    }
+
+    pub fn open_with_dos_offset(data: bytes::Bytes, limits: Limits, offset_seconds: i64) -> Result[
+        ZipArchive,
+        Error,
+    ] {
+        validate_dos_offset(offset_seconds)?;
+        ZipArchive::open_timestamp(data, limits, Option::Some(offset_seconds))
+    }
+
+    fn open_timestamp(data: bytes::Bytes, limits: Limits, dos_offset: Option[i64]) -> Result[
+        ZipArchive,
+        Error,
+    ] {
         limits.validate()?;
         if data.len() > limits.max_archive_bytes {
             return Result::Err(failure(ErrorKind::Limit, 0, "ZIP archive limit"))
@@ -493,7 +508,7 @@ impl ZipArchive {
         let mut offset = directory.start;
         let mut total = 0;
         for _ in 0..directory.count {
-            let parsed = zip_central(data, offset, directory.end, limits)?;
+            let parsed = zip_central(data, offset, directory.end, limits, dos_offset)?;
             if parsed.record.size > limits.max_total_bytes - total {
                 return Result::Err(failure(ErrorKind::Limit, offset, "ZIP expanded size limit"))
             }

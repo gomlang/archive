@@ -100,6 +100,26 @@ entry counts and offsets to its non-ZIP64 ranges. In TAR streaming APIs the
 archive limit counts consumed/emitted bytes; `decode_tar` additionally verifies
 that trailing bytes after the end marker are zero.
 
+### DOS modification timestamps
+
+`ZipArchive::open_with_dos_offset(data, limits, offset_seconds)` and
+`ZipSource::open_with_dos_offset(reader, size, limits, offset_seconds)` recover
+central-directory DOS timestamps when an extended Unix modification timestamp
+is absent. The caller supplies a fixed UTC offset in seconds, from -86399 to
+86399 inclusive; positive values mean east of UTC. The result is Unix seconds
+for `local_time - offset_seconds`. No process timezone, timezone database or
+DST inference is consulted. One offset applies to all entries in that call.
+
+A present Unix timestamp wins, including Unix zero, and the unused DOS date is
+not validated. Otherwise dates must be valid Gregorian dates from 1980 through
+2107, hours/minutes must be valid and DOS seconds must encode 0 through 58.
+Zero dates, invalid leap days and encoded seconds 60/62 are rejected. DOS time
+has two-second resolution. `Header.modified`, indexed records and extracted
+entry values all expose the converted seconds. Existing `open`, `read` and file
+convenience APIs retain their previous zero fallback; writing is unchanged.
+These methods retain the same source ownership, CRC checks and resource limits
+as their ordinary `open` counterparts.
+
 ## Extraction policy
 
 `extract(entries, existing_destination, ExtractOptions::standard())` validates
@@ -146,7 +166,9 @@ permissions are kept traversable while extracting.
   reduced to whole seconds. A PAX modification time must contain decimal whole
   seconds, optionally followed by a period and one or more decimal fractional
   digits; empty fractions, repeated periods and non-digit suffixes are rejected. ZIP writing supports unsigned 32-bit Unix seconds;
-  decoding ZIP entries without extended timestamps currently yields zero.
+  decoding ZIP entries without extended timestamps yields zero through the
+  existing read APIs. The explicit DOS-offset APIs described below recover
+  these local timestamps.
 - `TarReader::next_header` and `read_body_chunk` stream entry bodies within
   limits; calling `next_header` again skips any unread body. `TarReader::next`,
   `decode_tar`, `ZipArchive` indexing and GZIP convenience APIs still materialize

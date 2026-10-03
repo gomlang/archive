@@ -1,0 +1,293 @@
+package tests;
+
+use ecosystem::archive;
+use std::bytes;
+use std::io;
+use std::testing;
+
+// Fixed ZIP created by Python zipfile; its DOS timestamp has no Unix extra field.
+
+fn dos_fixture() -> bytes::Bytes {
+    bytes::Bytes::from_vec(
+        Vec::from_array(
+            [
+                80,
+                75,
+                3,
+                4,
+                20,
+                0,
+                0,
+                0,
+                0,
+                0,
+                92,
+                100,
+                93,
+                40,
+                69,
+                152,
+                148,
+                111,
+                4,
+                0,
+                0,
+                0,
+                4,
+                0,
+                0,
+                0,
+                9,
+                0,
+                0,
+                0,
+                99,
+                108,
+                111,
+                99,
+                107,
+                46,
+                116,
+                120,
+                116,
+                116,
+                105,
+                109,
+                101,
+                80,
+                75,
+                1,
+                2,
+                20,
+                3,
+                20,
+                0,
+                0,
+                0,
+                0,
+                0,
+                92,
+                100,
+                93,
+                40,
+                69,
+                152,
+                148,
+                111,
+                4,
+                0,
+                0,
+                0,
+                4,
+                0,
+                0,
+                0,
+                9,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                128,
+                1,
+                0,
+                0,
+                0,
+                0,
+                99,
+                108,
+                111,
+                99,
+                107,
+                46,
+                116,
+                120,
+                116,
+                80,
+                75,
+                5,
+                6,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                1,
+                0,
+                55,
+                0,
+                0,
+                0,
+                43,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+        ),
+    )
+}
+
+fn dos_set(data: bytes::Bytes, offset: isize, value: u64) -> () {
+    data.set(offset, value.to_u8());
+    data.set(offset + 1, (value >> 8).to_u8());
+}
+
+fn dos_with_fields(date: u64, time: u64) -> bytes::Bytes {
+    let data = dos_fixture();
+    dos_set(data, 10, time);
+    dos_set(data, 12, date);
+    dos_set(data, 43 + 12, time);
+    dos_set(data, 43 + 14, date);
+    data
+}
+
+#[test]
+fn dos_timestamp_matches_independent_gregorian_reference_vectors() -> () {
+    // Expected seconds use Python datetime with an explicit UTC timezone.
+    let vectors: Vec[(u64, u64, i64)] = Vec::from_array(
+        [
+            (33, 0, 315532800),
+            (93, 49021, 320716798),
+            (10143, 49021, 946684798),
+            (10333, 25692, 951827696),
+            (61532, 0, 4107456000),
+            (61537, 0, 4107542400),
+            (65439, 49021, 4354819198),
+        ],
+    );
+    for (date, time, expected) in vectors {
+        let data = dos_with_fields(date, time);
+        for zone in Vec::from_array([-86399, -18000, 0, 20700, 86399]) {
+            let index = testing::expect_ok(
+                archive::ZipArchive::open_with_dos_offset(data, archive::Limits::standard(), zone),
+                "index DOS",
+            );
+            testing::assert_eq(index.records()[0].header.modified, expected - zone);
+            testing::assert_eq(
+                testing::expect_ok(index.entry(0), "entry").header.modified,
+                expected - zone,
+            );
+            let source = testing::expect_ok(
+                archive::ZipSource::open_with_dos_offset(
+                    io::Cursor::new(data),
+                    data.len(),
+                    archive::Limits::standard(),
+                    zone,
+                ),
+                "source DOS",
+            );
+            testing::assert_eq(source.records()[0].header.modified, expected - zone);
+            testing::assert_eq(
+                testing::expect_ok(source.entry(0), "source entry").header.modified,
+                expected - zone,
+            );
+        }
+        testing::assert_eq(
+            testing::expect_ok(
+                archive::ZipArchive::open(data, archive::Limits::standard()),
+                "legacy",
+            ).records()[0].header.modified,
+            0,
+        );
+        testing::assert_eq(
+            testing::expect_ok(
+                archive::ZipSource::open(
+                    io::Cursor::new(data),
+                    data.len(),
+                    archive::Limits::standard(),
+                ),
+                "legacy source",
+            ).records()[0].header.modified,
+            0,
+        );
+    }
+}
+
+#[test]
+fn dos_timestamp_rejects_invalid_dates_times_and_offsets() -> () {
+    let invalid: Vec[(u64, u64)] = Vec::from_array(
+        [
+            (0, 0),
+            (33, 24 << 11),
+            (33, 60 << 5),
+            (33, 30),
+            (32, 0),
+            (13 << 5 | 1, 0),
+            (4 << 5 | 31, 0),
+            (1 << 9 | 2 << 5 | 29, 0),
+            (120 << 9 | 2 << 5 | 29, 0),
+        ],
+    );
+    for (date, time) in invalid {
+        let data = dos_with_fields(date, time);
+        testing::assert_err(
+            archive::ZipArchive::open_with_dos_offset(data, archive::Limits::standard(), 0),
+        );
+        testing::assert_err(
+            archive::ZipSource::open_with_dos_offset(
+                io::Cursor::new(data),
+                data.len(),
+                archive::Limits::standard(),
+                0,
+            ),
+        );
+        testing::assert_ok(archive::ZipArchive::open(data, archive::Limits::standard()));
+    }
+    let data = dos_fixture();
+    for zone in Vec::from_array([-86400, 86400, -9223372036854775807, 9223372036854775807]) {
+        testing::assert_err(
+            archive::ZipArchive::open_with_dos_offset(data, archive::Limits::standard(), zone),
+        );
+        testing::assert_err(
+            archive::ZipSource::open_with_dos_offset(
+                io::Cursor::new(data),
+                data.len(),
+                archive::Limits::standard(),
+                zone,
+            ),
+        );
+    }
+}
+
+#[test]
+fn unix_extra_timestamp_overrides_dos_even_at_zero_or_invalid_dos() -> () {
+    for timestamp in Vec::from_array([0, 1, 4294967295]) {
+        let entry = archive::Entry {
+            header: archive::Header { modified: timestamp, ..archive::Header::file("test") },
+            data: bytes::Bytes::from_string("data"),
+        };
+        let data = testing::expect_ok(
+            archive::encode_zip(
+                Vec::from_array([entry]),
+                archive::Compression::Stored,
+                archive::Limits::standard(),
+            ),
+            "encode",
+        );
+        // The writer deliberately emits zero DOS fields; the Unix field is authoritative.
+        let index = testing::expect_ok(
+            archive::ZipArchive::open_with_dos_offset(data, archive::Limits::standard(), 20700),
+            "extended",
+        );
+        testing::assert_eq(index.records()[0].header.modified, timestamp);
+        let source = testing::expect_ok(
+            archive::ZipSource::open_with_dos_offset(
+                io::Cursor::new(data),
+                data.len(),
+                archive::Limits::standard(),
+                -18000,
+            ),
+            "extended source",
+        );
+        testing::assert_eq(source.records()[0].header.modified, timestamp);
+    }
+}
