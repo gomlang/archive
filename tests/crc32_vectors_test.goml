@@ -1,0 +1,75 @@
+package tests;
+
+use ecosystem::archive;
+use std::bytes;
+use std::testing;
+
+// Expected values come from Python binascii.crc32(data, initial), independently
+// of this library's implementation. The payload cycles through all byte values.
+
+#[test]
+fn crc32_vectors_cover_all_byte_values_seeds_and_chunk_boundaries() -> () {
+    for (size, initial, expected) in Vec::from_array(
+        [
+            (0, 0x00000000, 0x00000000),
+            (0, 0x12345678, 0x12345678),
+            (0, 0xffffffff, 0xffffffff),
+            (1, 0x00000000, 0x56bcae53),
+            (1, 0x12345678, 0x0870630b),
+            (1, 0xffffffff, 0x7b41be21),
+            (2, 0x00000000, 0x42eb4eb2),
+            (2, 0x12345678, 0x27055bb9),
+            (2, 0xffffffff, 0xfccda3b2),
+            (15, 0x00000000, 0x7d666dc2),
+            (15, 0x12345678, 0x4c990f18),
+            (15, 0xffffffff, 0x554a91da),
+            (16, 0x00000000, 0x2cab9296),
+            (16, 0x12345678, 0x4a9c563e),
+            (16, 0xffffffff, 0x3fef263c),
+            (31, 0x00000000, 0xbaae3fbc),
+            (31, 0x12345678, 0xd5668889),
+            (31, 0xffffffff, 0x2c586cf3),
+            (32, 0x00000000, 0x50b0b573),
+            (32, 0x12345678, 0x066cb9e7),
+            (32, 0xffffffff, 0xb6451f21),
+            (255, 0x00000000, 0xcfe70d16),
+            (255, 0x12345678, 0x3dbab57c),
+            (255, 0xffffffff, 0xc49de445),
+            (256, 0x00000000, 0x5da8967f),
+            (256, 0x12345678, 0xf03d4381),
+            (256, 0xffffffff, 0xafc1ecd8),
+            (257, 0x00000000, 0x965b6a68),
+            (257, 0x12345678, 0xccf320a6),
+            (257, 0xffffffff, 0xde1b3559),
+            (8191, 0x00000000, 0xe850fbb7),
+            (8191, 0x12345678, 0xf2573e24),
+            (8191, 0xffffffff, 0xe1773ac6),
+            (8192, 0x00000000, 0xfc5eb2f7),
+            (8192, 0x12345678, 0x954277cc),
+            (8192, 0xffffffff, 0xdb55d49c),
+            (8193, 0x00000000, 0x7599975e),
+            (8193, 0x12345678, 0xc4fb62bf),
+            (8193, 0xffffffff, 0xafde24e8),
+        ],
+    ) {
+        let data = bytes::Bytes::with_capacity(size);
+        for index in 0..size {
+            data.push(((index * 73 + 19) % 256).to_u8());
+        }
+        testing::assert_eq(archive::crc32_update(initial, data.as_slice()), expected);
+        for chunk in[1, 7, 257, 8192] {
+            let mut offset = 0;
+            let mut value = initial;
+            while offset < data.len() {
+                let end = if data.len() - offset < chunk {
+                    data.len()
+                } else {
+                    offset + chunk
+                };
+                value = archive::crc32_update(value, data.slice(offset, end));
+                offset = end;
+            }
+            testing::assert_eq(value, expected);
+        }
+    }
+}
