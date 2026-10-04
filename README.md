@@ -65,7 +65,8 @@ including a failed final flush, poison writers, and TAR parsing failures poison
 readers. Successful `finish` and terminal TAR EOF are idempotent. Callers own and
 close the underlying stream.
 Instances are intended for one sequential owner; independent instances can run
-concurrently.
+concurrently. `append_reader` rejects a finished or failed writer before reading
+from the supplied source.
 
 Generic reads also propagate interruptions immediately without retry. A failing
 read may already have consumed bytes or modified the destination buffer without

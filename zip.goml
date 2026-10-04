@@ -331,6 +331,9 @@ impl[W: Write] ZipWriter[W] {
         reader: R,
         compression: Compression,
     ) -> Result[(), Error] {
+        if self.done.get() || self.broken.get() {
+            return Result::Err(failure(ErrorKind::Closed, 0, "ZIP writer closed or failed"))
+        }
         if size < 0 || size > self.limits.max_entry_bytes {
             return Result::Err(failure(ErrorKind::Limit, 0, "ZIP entry size limit"))
         }
