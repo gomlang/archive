@@ -1,0 +1,62 @@
+package tests;
+
+use ecosystem::archive;
+use std::fs;
+use std::os::linux::fd;
+use std::task;
+use std::testing;
+use std::time;
+
+#[test]
+fn zip_source_rejects_fifo_without_waiting_for_a_writer() -> () {
+    let root = temporary();
+    defer {
+        let _ = fs::remove_dir_all(root);
+    };
+    command("mkfifo", Vec::from_array(["input"]), root);
+    testing::assert_ok(fs::symbolic_link("input", root + "/alias"));
+    let before = testing::expect_ok(fs::read_dir("/proc/self/fd"), "descriptor count").len();
+    for name in Vec::from_array(["input", "alias"]) {
+        let immediate = task::scope(
+            |scope| {
+                let worker = scope.spawn(
+                    |_: task::CancelToken| archive::open_zip_source(
+                        root + "/" + name,
+                        archive::Limits::standard(),
+                    ),
+                );
+                let immediate = select {
+                    recv(worker.done()) as _ => true,
+                    recv(time::after(time::Duration::from_seconds(2))) as _ => false,
+                };
+                let rescue = if immediate {
+                    Option::None
+                } else {
+                    Option::Some(
+                        testing::expect_ok(
+                            fd::open(root + "/input", fd::O_RDWR | fd::O_NONBLOCK, 0),
+                            "unblock old FIFO open",
+                        ),
+                    )
+                };
+                let result = worker.join();
+                if let Some(file) = rescue {
+                    testing::assert_ok(file.close());
+                }
+                if let Ok(source) = result {
+                    testing::assert_ok(source.close());
+                }
+                testing::assert_eq(
+                    testing::expect_err(result, "regular ZIP files only").kind,
+                    archive::ErrorKind::Invalid,
+                );
+                immediate
+            },
+        );
+        testing::assert(immediate);
+        testing::assert_eq(
+            testing::expect_ok(fs::read_dir("/proc/self/fd"), "descriptor count").len(),
+            before,
+        );
+    }
+}

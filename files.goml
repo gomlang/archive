@@ -330,7 +330,7 @@ impl Close for ZipFile {
 
 pub fn open_zip_source(path: string, limits: Limits) -> Result[ZipSource[ZipFile], Error] {
     limits.validate()?;
-    let descriptor = fd::open(path, fd::O_RDONLY, 0).map_err(
+    let descriptor = fd::open(path, fd::O_RDONLY | fd::O_NONBLOCK, 0).map_err(
         |error| failure(ErrorKind::Io, 0, error.to_string()),
     )?;
     let stat = match descriptor.stat() {
