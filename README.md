@@ -46,6 +46,9 @@ let first_file = indexed.entry(1)?;
   It rejects FIFOs without waiting for a writer, including through symlinks,
   and closes the descriptor when file-type validation fails.
   The caller must keep any supplied random-access source stable while indexed.
+- ZIP `records()` and `entry()` return independent metadata, including the
+  mutable `Header.pax` vector. Caller edits do not alter the index or other
+  returned records and entries.
 - `open_tar`, `open_tar_gz`, `open_zip`, `read_file`, and `write_file` supply file
   APIs. `write_file` creates a new file exclusively and never overwrites one.
 - `crc32` and incremental `crc32_update` implement IEEE CRC32 in GoML.

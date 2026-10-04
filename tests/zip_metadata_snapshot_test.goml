@@ -1,0 +1,46 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Compression, Entry, Error, Limits, ZipArchive, ZipRecord, ZipSource};
+use std::bytes;
+use std::io;
+use std::testing;
+
+fn check_metadata_snapshots(records: () -> Vec[ZipRecord], entry: (isize) -> Result[Entry, Error]) -> () {
+    for index in 0..3 {
+        let first_record = records()[index];
+        let retained_record = records()[index];
+        let first_entry = testing::expect_ok(entry(index), "first entry");
+        let retained_entry = testing::expect_ok(entry(index), "retained entry");
+        first_record.header.pax.push(("vendor.record", "caller-owned"));
+        first_entry.header.pax.push(("vendor.entry", "caller-owned"));
+        testing::assert_eq(records()[index].header.pax.len(), 0);
+        testing::assert_eq(testing::expect_ok(entry(index), "fresh entry").header.pax.len(), 0);
+        testing::assert_eq(retained_record.header.pax.len(), 0);
+        testing::assert_eq(retained_entry.header.pax.len(), 0);
+        testing::assert_eq(first_record.header.pax.len(), 1);
+        testing::assert_eq(first_entry.header.pax.len(), 1);
+    }
+}
+
+#[test]
+fn zip_returned_metadata_does_not_mutate_the_index_or_other_results() -> () {
+    let limits = Limits::standard();
+    let entries = Vec::from_array(
+        [
+            Entry::file("file", bytes::Bytes::from_string("contents")),
+            Entry::directory("directory"),
+            Entry::symlink("link", "file"),
+        ],
+    );
+    for compression in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+        let packed = testing::expect_ok(archive::encode_zip(entries, compression, limits), "encode");
+        let memory = testing::expect_ok(ZipArchive::open(packed, limits), "memory index");
+        check_metadata_snapshots(|| memory.records(), |index| memory.entry(index));
+        let source = testing::expect_ok(
+            ZipSource::open(io::Cursor::new(packed), packed.len(), limits),
+            "random-access index",
+        );
+        check_metadata_snapshots(|| source.records(), |index| source.entry(index));
+    }
+}

@@ -530,6 +530,18 @@ pub struct ZipRecord {
     data_offset: isize,
 }
 
+fn zip_record_snapshot(record: ZipRecord) -> ZipRecord {
+    ZipRecord { header: Header { pax: record.header.pax.copy(), ..record.header }, ..record }
+}
+
+fn zip_records_snapshot(records: Vec[ZipRecord]) -> Vec[ZipRecord] {
+    let snapshot = Vec::new();
+    for record in records {
+        snapshot.push(zip_record_snapshot(record));
+    }
+    snapshot
+}
+
 pub struct ZipArchive {
     data: bytes::Bytes,
     records_value: Vec[ZipRecord],
@@ -650,13 +662,15 @@ impl ZipArchive {
     }
 
     pub fn records(self: ZipArchive) -> Vec[ZipRecord] {
-        self.records_value.copy()
+        zip_records_snapshot(self.records_value)
     }
 
     pub fn entry(self: ZipArchive, index: isize) -> Result[Entry, Error] {
-        let record = self.records_value.get_checked(index).ok_or(
-            failure(ErrorKind::Invalid, index, "ZIP index outside archive"),
-        )?;
+        let record = zip_record_snapshot(
+            self.records_value.get_checked(index).ok_or(
+                failure(ErrorKind::Invalid, index, "ZIP index outside archive"),
+            )?,
+        );
         let packed = part(self.data, record.data_offset, record.compressed_size)?;
         let data = match record.compression {
             Stored => packed,

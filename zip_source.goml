@@ -251,13 +251,15 @@ impl[R: ReadAt] ZipSource[R] {
     }
 
     pub fn records(self: ZipSource[R]) -> Vec[ZipRecord] {
-        self.records_value.copy()
+        zip_records_snapshot(self.records_value)
     }
 
     pub fn entry(self: ZipSource[R], index: isize) -> Result[Entry, Error] {
-        let record = self.records_value.get_checked(index).ok_or(
-            failure(ErrorKind::Invalid, index, "ZIP index outside archive"),
-        )?;
+        let record = zip_record_snapshot(
+            self.records_value.get_checked(index).ok_or(
+                failure(ErrorKind::Invalid, index, "ZIP index outside archive"),
+            )?,
+        );
         let packed = zip_at(self.reader, record.data_offset, record.compressed_size, self.size)?;
         let data = match record.compression {
             Stored => packed,
