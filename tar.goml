@@ -371,7 +371,10 @@ impl[W: Write] TarWriter[W] {
         self.write_bytes(zeros(1024))?;
         self.closed.set(true);
         self.writer.flush().map_err(
-            |error| failure(ErrorKind::Io, self.written.get(), error.to_string()),
+            |error| {
+                self.broken.set(true);
+                failure(ErrorKind::Io, self.written.get(), error.to_string())
+            },
         )
     }
 }

@@ -1,0 +1,102 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Compression, Entry, ErrorKind, Limits, TarWriter, ZipWriter};
+use std::bytes;
+use std::io;
+use io::Write;
+use std::testing;
+
+struct FlushFailure {
+    output: io::Cursor,
+    flushes: Ref[isize],
+}
+
+impl Write for FlushFailure {
+    fn write(self: FlushFailure, data: Slice[byte]) -> Result[isize, io::Error] {
+        self.output.write(data)
+    }
+
+    fn flush(self: FlushFailure) -> Result[(), io::Error] {
+        self.flushes.set(self.flushes.get() + 1);
+        Result::Err(
+            io::Error::new(
+                io::ErrorKind::Interrupted,
+                "flush",
+                Option::None,
+                Option::None,
+                "injected flush failure",
+            ),
+        )
+    }
+}
+
+#[test]
+fn tar_finish_flush_failure_is_terminal_for_aliases() -> () {
+    let output = io::Cursor::new(bytes::Bytes::new());
+    let flushes = Ref::new(0);
+    let writer = testing::expect_ok(
+        TarWriter::new(FlushFailure { output, flushes }, Limits::standard()),
+        "tar writer",
+    );
+    let alias = writer;
+    testing::expect_ok(writer.append(Entry::directory("directory/")), "entry");
+    let error = testing::expect_err(writer.finish(), "flush fails");
+    testing::assert_eq(error.kind, ErrorKind::Io);
+    testing::assert(error.message.contains("injected flush failure"));
+    let length = output.bytes().len();
+    testing::assert_eq(error.offset, length);
+    testing::assert_eq(
+        testing::expect_err(alias.finish(), "failure stays terminal").kind,
+        ErrorKind::Closed,
+    );
+    testing::assert_eq(
+        testing::expect_err(writer.finish(), "repeat failure").kind,
+        ErrorKind::Closed,
+    );
+    testing::assert_eq(
+        testing::expect_err(alias.append(Entry::directory("late/")), "append after failure").kind,
+        ErrorKind::Closed,
+    );
+    testing::assert_eq(flushes.get(), 1);
+    testing::assert_eq(output.bytes().len(), length);
+}
+
+#[test]
+fn zip_finish_flush_failure_is_terminal_for_aliases() -> () {
+    for zip64 in Vec::from_array([false, true]) {
+        let output = io::Cursor::new(bytes::Bytes::new());
+        let flushes = Ref::new(0);
+        let writer = testing::expect_ok(
+            ZipWriter::with_zip64(FlushFailure { output, flushes }, Limits::standard(), zip64),
+            "zip writer",
+        );
+        let alias = writer;
+        testing::expect_ok(
+            writer.append(Entry::directory("directory/"), Compression::Stored),
+            "entry",
+        );
+        let error = testing::expect_err(writer.finish("comment"), "flush fails");
+        testing::assert_eq(error.kind, ErrorKind::Io);
+        testing::assert(error.message.contains("injected flush failure"));
+        let length = output.bytes().len();
+        testing::assert_eq(error.offset, length);
+        testing::assert_eq(
+            testing::expect_err(alias.finish("comment"), "failure stays terminal").kind,
+            ErrorKind::Closed,
+        );
+        testing::assert_eq(
+            testing::expect_err(writer.finish(""), "repeat failure").kind,
+            ErrorKind::Closed,
+        );
+        testing::assert_eq(
+            testing::expect_err(
+                alias.append(Entry::directory("late/"), Compression::Stored),
+                "append after failure",
+            ).kind,
+            ErrorKind::Closed,
+        );
+        testing::assert_eq(flushes.get(), 1);
+        testing::assert_eq(output.bytes().len(), length);
+    }
+}

@@ -426,7 +426,10 @@ impl[W: Write] ZipWriter[W] {
         self.write_bytes(end)?;
         self.done.set(true);
         self.writer.flush().map_err(
-            |error| failure(ErrorKind::Io, self.position.get(), error.to_string()),
+            |error| {
+                self.broken.set(true);
+                failure(ErrorKind::Io, self.position.get(), error.to_string())
+            },
         )
     }
 }

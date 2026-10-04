@@ -60,9 +60,10 @@ concatenated members and optional headers, is shared there. ZLIB and LZW are
 also available from the compress module.
 
 Writers complete short writes through standard traits and propagate write errors,
-including interruptions, without automatic replay. Partial
-output failures poison writers, and TAR parsing failures poison readers. `finish`
-and terminal TAR EOF are idempotent. Callers own and close the underlying stream.
+including interruptions, without automatic replay. Partial output failures,
+including a failed final flush, poison writers, and TAR parsing failures poison
+readers. Successful `finish` and terminal TAR EOF are idempotent. Callers own and
+close the underlying stream.
 Instances are intended for one sequential owner; independent instances can run
 concurrently.
 
