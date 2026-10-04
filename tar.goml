@@ -127,21 +127,36 @@ fn tar_set_octal(block: bytes::Bytes, offset: isize, width: isize, value: u64) -
     Result::Ok(())
 }
 
-fn pax_record(key: string, value: string) -> Result[string, Error] {
+fn pax_record(key: string, value: string, limit: isize) -> Result[string, Error] {
     if key == "" || key.contains("=") || key.contains("\n") || key.contains("\u0000")
         || value.contains("\u0000") {
         return Result::Err(failure(ErrorKind::Invalid, 0, "invalid PAX record"))
     }
-    let body = " " + key + "=" + value + "\n";
-    let mut length = body.to_bytes().len() + 1;
+    if key.byte_len() > limit || value.byte_len() > limit - key.byte_len() {
+        return Result::Err(failure(ErrorKind::Limit, 0, "PAX metadata exceeds limit"))
+    }
+    let body_length = (key.byte_len() + value.byte_len()).to_u64() + 3;
+    let mut length = body_length + 1;
     loop {
-        let next = body.to_bytes().len() + length.to_string().len();
+        let next = body_length + length.to_string().byte_len().to_u64();
         if next == length {
             break
         }
         length = next;
     }
-    Result::Ok(length.to_string() + body)
+    if length > limit.to_u64() {
+        return Result::Err(failure(ErrorKind::Limit, 0, "PAX metadata exceeds limit"))
+    }
+    Result::Ok(length.to_string() + " " + key + "=" + value + "\n")
+}
+
+fn append_pax(records: bytes::Bytes, key: string, value: string, maximum: isize) -> Result[
+    (),
+    Error,
+] {
+    let record = pax_record(key, value, maximum - records.len())?;
+    records.extend_from_slice(bytes::Bytes::from_string(record).as_slice());
+    Result::Ok(())
 }
 
 fn parse_pax(data: bytes::Bytes) -> Result[Vec[(string, string)], Error] {
@@ -210,7 +225,7 @@ fn tar_prepare_pax(header: Header, limits: Limits) -> Result[(Header, bytes::Byt
     if header.modified < 0 {
         return Result::Err(failure(ErrorKind::Unsupported, 0, "negative tar timestamp"))
     }
-    let mut records = "";
+    let records = bytes::Bytes::new();
     for (key, value) in header.pax {
         if key == "path" || key == "linkpath" || key == "size" || key == "uid" || key == "gid"
             || key == "mtime"
@@ -221,41 +236,38 @@ fn tar_prepare_pax(header: Header, limits: Limits) -> Result[(Header, bytes::Byt
                 failure(ErrorKind::Invalid, 0, "reserved PAX key must use header field"),
             )
         }
-        records += pax_record(key, value)?;
+        append_pax(records, key, value, limits.max_metadata_bytes)?;
     }
     let mut stored = header;
-    if header.path.to_bytes().len() > 100 {
-        records += pax_record("path", header.path)?;
+    if header.path.byte_len() > 100 {
+        append_pax(records, "path", header.path, limits.max_metadata_bytes)?;
         stored = Header { path: "PaxEntry", ..stored };
     }
-    if header.link.to_bytes().len() > 100 {
-        records += pax_record("linkpath", header.link)?;
+    if header.link.byte_len() > 100 {
+        append_pax(records, "linkpath", header.link, limits.max_metadata_bytes)?;
         stored = Header { link: "", ..stored };
     }
-    if header.user.to_bytes().len() > 32 {
-        records += pax_record("uname", header.user)?;
+    if header.user.byte_len() > 32 {
+        append_pax(records, "uname", header.user, limits.max_metadata_bytes)?;
         stored = Header { user: "", ..stored };
     }
-    if header.group.to_bytes().len() > 32 {
-        records += pax_record("gname", header.group)?;
+    if header.group.byte_len() > 32 {
+        append_pax(records, "gname", header.group, limits.max_metadata_bytes)?;
         stored = Header { group: "", ..stored };
     }
     if header.uid > 2097151 {
-        records += pax_record("uid", header.uid.to_string())?;
+        append_pax(records, "uid", header.uid.to_string(), limits.max_metadata_bytes)?;
         stored = Header { uid: 0, ..stored };
     }
     if header.gid > 2097151 {
-        records += pax_record("gid", header.gid.to_string())?;
+        append_pax(records, "gid", header.gid.to_string(), limits.max_metadata_bytes)?;
         stored = Header { gid: 0, ..stored };
     }
     if header.modified > 8589934591 {
-        records += pax_record("mtime", header.modified.to_string())?;
+        append_pax(records, "mtime", header.modified.to_string(), limits.max_metadata_bytes)?;
         stored = Header { modified: 0, ..stored };
     }
-    if records.to_bytes().len() > limits.max_metadata_bytes {
-        return Result::Err(failure(ErrorKind::Limit, 0, "PAX metadata exceeds limit"))
-    }
-    Result::Ok((stored, bytes::Bytes::from_string(records)))
+    Result::Ok((stored, records))
 }
 
 pub struct TarWriter[W] {

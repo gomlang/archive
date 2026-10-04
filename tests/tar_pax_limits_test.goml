@@ -1,0 +1,102 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Entry, ErrorKind, Header, Limits, TarWriter};
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn tar_pax_budget_includes_the_full_self_sized_record() -> () {
+    for (value_length, record_length) in[(0, 5), (4, 9), (5, 11), (93, 99), (94, 101)] {
+        let mut value = "";
+        for _ in 0..value_length {
+            value += "x";
+        }
+        let header = Header::file("file");
+        header.pax.push(("k", value));
+        for fits in[false, true] {
+            let limit = if fits {
+                record_length
+            } else {
+                record_length - 1
+            };
+            let limits = Limits { max_metadata_bytes: limit, ..Limits::standard() };
+            let output = io::Cursor::new(bytes::Bytes::new());
+            let writer = testing::expect_ok(TarWriter::new(output, limits), "writer");
+            let source = CountedTarSource {
+                cursor: io::Cursor::new(bytes::Bytes::from_string("a")),
+                calls: Ref::new(0),
+            };
+            let result = writer.append_reader(header, 1, source);
+            if fits {
+                testing::assert_ok(result);
+                testing::assert_eq(source.calls.get(), 1);
+                let encoded = bytes::Bytes::from_string(
+                    record_length.to_string() + " k=" + value + "\n",
+                );
+                testing::assert(
+                    output.bytes().slice(512, 512 + record_length).to_vec() == encoded.to_vec(),
+                );
+            } else {
+                testing::assert_eq(testing::expect_err(result, "PAX limit").kind, ErrorKind::Limit);
+                testing::assert_eq(source.calls.get(), 0);
+                testing::assert_eq(source.cursor.position(), 0);
+                testing::assert(output.bytes().is_empty());
+                testing::assert_ok(
+                    writer.append(Entry::file("retry", bytes::Bytes::from_string("a"))),
+                );
+            }
+            testing::assert_ok(writer.finish());
+            let entries = testing::expect_ok(
+                archive::decode_tar(output.bytes(), limits),
+                "complete archive",
+            );
+            testing::assert_eq(entries.len(), 1);
+            if fits {
+                testing::assert_eq(entries[0].header.pax.len(), 1);
+                testing::assert(entries[0].header.pax[0] == ("k", value));
+            } else {
+                testing::assert_eq(entries[0].header.path, "retry");
+            }
+        }
+    }
+}
+
+#[test]
+fn tar_pax_budget_counts_utf8_and_multiple_records_before_io() -> () {
+    let header = Header::file("file");
+    header.pax.push(("v", "é\nx"));
+    header.pax.push(("w", "two"));
+    for limit in[16, 17] {
+        let limits = Limits { max_metadata_bytes: limit, ..Limits::standard() };
+        let output = io::Cursor::new(bytes::Bytes::new());
+        let writer = testing::expect_ok(TarWriter::new(output, limits), "writer");
+        let source = CountedTarSource {
+            cursor: io::Cursor::new(bytes::Bytes::from_string("a")),
+            calls: Ref::new(0),
+        };
+        let result = writer.append_reader(header, 1, source);
+        if limit == 17 {
+            testing::assert_ok(result);
+            let expected = bytes::Bytes::from_string("9 v=é\nx\n8 w=two\n");
+            testing::assert(output.bytes().slice(512, 529).to_vec() == expected.to_vec());
+        } else {
+            testing::assert_eq(
+                testing::expect_err(result, "cumulative PAX limit").kind,
+                ErrorKind::Limit,
+            );
+            testing::assert_eq(source.calls.get(), 0);
+            testing::assert_eq(source.cursor.position(), 0);
+            testing::assert(output.bytes().is_empty());
+            testing::assert_ok(writer.append_reader(Header::file("retry"), 1, source));
+        }
+        testing::assert_ok(writer.finish());
+        let entries = testing::expect_ok(archive::decode_tar(output.bytes(), limits), "decode");
+        if limit == 17 {
+            testing::assert(entries[0].header.pax == header.pax);
+        } else {
+            testing::assert_eq(entries[0].header.path, "retry");
+        }
+    }
+}
