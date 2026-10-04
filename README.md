@@ -29,6 +29,8 @@ let first_file = indexed.entry(1)?;
 - `TarReader[R: Read]::next` reads one entry at a time, materializing at most one
   bounded entry body. The next call releases that body's storage when the caller
   no longer retains it. Global/local PAX headers are applied during iteration.
+  Within a global PAX header, the last record for each key replaces earlier
+  records; an empty final value removes that key from the inherited metadata.
 - `ZipWriter[W: Write]` writes local headers and compressed bodies immediately,
   retaining the central directory and one bounded compression buffer. Both
   `append` and `append_reader` are available; `finish(comment)` emits the central

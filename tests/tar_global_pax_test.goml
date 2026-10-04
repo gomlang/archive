@@ -1,0 +1,111 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Entry, Limits};
+use std::bytes;
+use std::testing;
+
+fn global_pax_header(records: Vec[(string, string)]) -> bytes::Bytes {
+    let mut payload = "";
+    for (key, value) in records {
+        let body = " " + key + "=" + value + "\n";
+        let mut length = body.byte_len() + 1;
+        while length != body.byte_len() + length.to_string().byte_len() {
+            length = body.byte_len() + length.to_string().byte_len();
+        }
+        payload += length.to_string() + body;
+    }
+    let template = testing::expect_ok(
+        archive::encode_tar(
+            Vec::from_array([Entry::file("global", bytes::Bytes::new())]),
+            Limits::standard(),
+        ),
+        "USTAR template",
+    );
+    let header = bytes::Bytes::from_slice_copy(template.slice(0, 512));
+    header.set(156, b'g');
+    let mut size = payload.byte_len();
+    for index in 0..11 {
+        header.set(134 - index, b'0' + (size & 7).to_u8());
+        size >>= 3;
+    }
+    let mut checksum = 0;
+    for index in 148..156 {
+        header.set(index, b' ');
+    }
+    for value in header.as_slice() {
+        checksum += value.to_isize();
+    }
+    for index in 0..6 {
+        header.set(153 - index, b'0' + (checksum & 7).to_u8());
+        checksum >>= 3;
+    }
+    header.set(154, 0);
+    header.extend_from_slice(bytes::Bytes::from_string(payload).as_slice());
+    while header.len() % 512 != 0 {
+        header.push(0);
+    }
+    header
+}
+
+fn global_pax_file(path: string, end: bool) -> bytes::Bytes {
+    let data = testing::expect_ok(
+        archive::encode_tar(
+            Vec::from_array([Entry::file(path, bytes::Bytes::new())]),
+            Limits::standard(),
+        ),
+        "file fixture",
+    );
+    bytes::Bytes::from_slice_copy(
+        data.slice(
+            0,
+            if end {
+                data.len()
+            } else {
+                data.len() - 1024
+            },
+        ),
+    )
+}
+
+#[test]
+fn tar_global_pax_last_record_controls_replacement_and_deletion() -> () {
+    let packed = global_pax_header(
+        Vec::from_array([("vendor.drop", "old"), ("vendor.keep", "stable")]),
+    );
+    packed.extend_from_slice(global_pax_file("first", false).as_slice());
+    packed.extend_from_slice(
+        global_pax_header(
+            Vec::from_array(
+                [
+                    ("vendor.drop", "intermediate"),
+                    ("vendor.new", "first"),
+                    ("vendor.drop", ""),
+                    ("vendor.new", "last"),
+                ],
+            ),
+        ).as_slice(),
+    );
+    packed.extend_from_slice(global_pax_file("second", false).as_slice());
+    packed.extend_from_slice(global_pax_file("third", true).as_slice());
+    let entries = testing::expect_ok(archive::decode_tar(packed, Limits::standard()), "global PAX");
+    testing::assert_eq(entries.len(), 3);
+    testing::assert(
+        entries[0].header.pax
+            == Vec::from_array([("vendor.drop", "old"), ("vendor.keep", "stable")]),
+    );
+    for index in 1..3 {
+        testing::assert(
+            entries[index].header.pax
+                == Vec::from_array([("vendor.keep", "stable"), ("vendor.new", "last")]),
+        );
+    }
+}
+
+#[test]
+fn tar_global_pax_superseded_numeric_values_are_not_applied() -> () {
+    let packed = global_pax_header(Vec::from_array([("uid", "not-a-number"), ("uid", "42")]));
+    packed.extend_from_slice(global_pax_file("file", true).as_slice());
+    let entries = testing::expect_ok(archive::decode_tar(packed, Limits::standard()), "last UID");
+    testing::assert_eq(entries[0].header.uid, 42);
+}

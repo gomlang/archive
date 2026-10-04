@@ -633,19 +633,19 @@ impl[R: Read] TarReader[R] {
                 if flag == b'g' {
                     let existing = self.globals.get();
                     let combined = Vec::new();
+                    let last: HashMap[string, isize] = HashMap::new();
+                    for index in 0..records.len() {
+                        let (key, _) = records[index];
+                        last.insert(key, index);
+                    }
                     for (key, value) in existing {
-                        let mut replaced = false;
-                        for (new_key, _) in records {
-                            if key == new_key {
-                                replaced = true;
-                            }
-                        }
-                        if !replaced {
+                        if last.get(key).is_none() {
                             combined.push((key, value))
                         }
                     }
-                    for (key, value) in records {
-                        if value != "" {
+                    for index in 0..records.len() {
+                        let (key, value) = records[index];
+                        if last.get(key) == Option::Some(index) && value != "" {
                             combined.push((key, value))
                         }
                     }
