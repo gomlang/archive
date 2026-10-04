@@ -1,0 +1,104 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Compression, Entry, ErrorKind, Header, Limits, ZipWriter};
+use std::bytes;
+use std::io;
+use io::Read;
+use std::testing;
+
+struct CountedZipSource {
+    cursor: io::Cursor,
+    calls: Ref[isize],
+}
+
+impl Read for CountedZipSource {
+    fn read(self: CountedZipSource, output: MutSlice[byte]) -> Result[isize, io::Error] {
+        self.calls.set(self.calls.get() + 1);
+        self.cursor.read(output)
+    }
+}
+
+fn expect_zip_budget_rejection(
+    writer: ZipWriter[io::Cursor],
+    output: io::Cursor,
+    compression: Compression,
+) -> () {
+    let before = output.bytes().len();
+    let source = CountedZipSource {
+        cursor: io::Cursor::new(bytes::Bytes::from_string("payload")),
+        calls: Ref::new(0),
+    };
+    let error = testing::expect_err(
+        writer.append_reader(Header::file("rejected"), 7, source, compression),
+        "known budget overflow",
+    );
+    testing::assert_eq(error.kind, ErrorKind::Limit);
+    testing::assert_eq(source.calls.get(), 0);
+    testing::assert_eq(source.cursor.position(), 0);
+    testing::assert_eq(output.bytes().len(), before);
+}
+
+#[test]
+fn zip_reader_checks_remaining_size_before_reading_and_allows_recovery() -> () {
+    for compression in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+        for existing in Vec::from_array([false, true]) {
+            let output = io::Cursor::new(bytes::Bytes::new());
+            let limits = Limits { max_total_bytes: 4, ..Limits::standard() };
+            let writer = testing::expect_ok(ZipWriter::new(output, limits), "ZIP writer");
+            if existing {
+                testing::expect_ok(
+                    writer.append(
+                        Entry::file("first", bytes::Bytes::from_string("ab")),
+                        compression,
+                    ),
+                    "first entry",
+                );
+            }
+            expect_zip_budget_rejection(writer, output, compression);
+            testing::expect_ok(
+                writer.append_reader(
+                    Header::file("recovered"),
+                    2,
+                    io::Cursor::new(bytes::Bytes::from_string("cd")),
+                    compression,
+                ),
+                "smaller entry after rejected source",
+            );
+            testing::expect_ok(writer.finish(""), "finish after rejected source");
+            let entries = testing::expect_ok(
+                archive::decode_zip(output.bytes(), limits),
+                "valid ZIP",
+            );
+            testing::assert_eq(
+                entries.len(),
+                if existing {
+                    2
+                } else {
+                    1
+                },
+            );
+            testing::assert_eq(entries[entries.len() - 1].header.path, "recovered");
+            testing::assert(entries[entries.len() - 1].data.to_vec() == b"cd");
+        }
+    }
+}
+
+#[test]
+fn zip_reader_checks_entry_count_before_reading_and_can_still_finish() -> () {
+    for maximum in Vec::from_array([0, 1]) {
+        let output = io::Cursor::new(bytes::Bytes::new());
+        let limits = Limits { max_entries: maximum, ..Limits::standard() };
+        let writer = testing::expect_ok(ZipWriter::new(output, limits), "ZIP writer");
+        if maximum > 0 {
+            testing::expect_ok(
+                writer.append(Entry::directory("first/"), Compression::Stored),
+                "first entry",
+            );
+        }
+        expect_zip_budget_rejection(writer, output, Compression::Stored);
+        testing::expect_ok(writer.finish(""), "finish after rejected source");
+        let entries = testing::expect_ok(archive::decode_zip(output.bytes(), limits), "valid ZIP");
+        testing::assert_eq(entries.len(), maximum);
+    }
+}

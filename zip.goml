@@ -334,7 +334,9 @@ impl[W: Write] ZipWriter[W] {
         if self.done.get() || self.broken.get() {
             return Result::Err(failure(ErrorKind::Closed, 0, "ZIP writer closed or failed"))
         }
-        if size < 0 || size > self.limits.max_entry_bytes {
+        if size < 0 || size > self.limits.max_entry_bytes
+            || size > self.limits.max_total_bytes - self.total.get()
+            || self.count.get() >= self.limits.max_entries {
             return Result::Err(failure(ErrorKind::Limit, 0, "ZIP entry size limit"))
         }
         let data = zeros(size);
