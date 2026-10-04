@@ -154,6 +154,33 @@ impl[W: Write] ZipWriter[W] {
         }
     }
 
+    fn check_archive_budget(self: ZipWriter[W], local: u64, packed: u64, metadata: u64) -> Result[
+        (),
+        Error,
+    ] {
+        let available = (self.limits.max_archive_bytes - self.position.get()).to_u64();
+        if local > available || packed > available - local {
+            return Result::Err(failure(ErrorKind::Limit, 0, "ZIP archive limit"))
+        }
+        let remaining = available - local - packed;
+        let directory = self.central.len().to_u64() + metadata;
+        if directory > remaining {
+            return Result::Err(failure(ErrorKind::Limit, 0, "ZIP archive limit"))
+        }
+        let future_position = self.position.get().to_u64() + local + packed;
+        let wide = self.force_zip64 || self.count.get() + 1 >= 65535 || directory >= 4294967295
+            || future_position >= 4294967295;
+        let end_size: u64 = if wide {
+            98
+        } else {
+            22
+        };
+        if end_size > remaining - directory {
+            return Result::Err(failure(ErrorKind::Limit, 0, "ZIP archive limit"))
+        }
+        Result::Ok(())
+    }
+
     pub fn append(self: ZipWriter[W], entry: Entry, compression: Compression) -> Result[(), Error] {
         if self.done.get() || self.broken.get() {
             return Result::Err(failure(ErrorKind::Closed, 0, "ZIP writer closed or failed"))
@@ -327,22 +354,11 @@ impl[W: Write] ZipWriter[W] {
         if central.len() > self.limits.max_metadata_bytes - self.central.len() {
             return Result::Err(failure(ErrorKind::Limit, 0, "ZIP directory metadata limit"))
         }
-        let future_position = self.position.get().to_u64() + local.len().to_u64()
-            + packed.len().to_u64();
-        let future_directory = self.central.len().to_u64() + central.len().to_u64();
-        let future_wide = self.force_zip64 || self.count.get() + 1 >= 65535
-            || future_directory >= 4294967295
-            || future_position >= 4294967295;
-        if local.len().to_u64() + packed.len().to_u64() + self.central.len().to_u64()
-            + central.len().to_u64()
-            + if future_wide {
-                98
-            } else {
-                22
-            }
-            > (self.limits.max_archive_bytes - self.position.get()).to_u64() {
-            return Result::Err(failure(ErrorKind::Limit, 0, "ZIP archive limit"))
-        }
+        self.check_archive_budget(
+            local.len().to_u64(),
+            packed.len().to_u64(),
+            central.len().to_u64(),
+        )?;
         self.write_bytes(local)?;
         self.write_bytes(packed)?;
         self.central.extend_from_slice(central.as_slice());
@@ -393,6 +409,18 @@ impl[W: Write] ZipWriter[W] {
         if metadata_size > self.limits.max_metadata_bytes - self.central.len() {
             return Result::Err(failure(ErrorKind::Limit, 0, "ZIP directory metadata limit"))
         }
+        let local_size = 30 + filename.len() + time_extra.len()
+            + if wide_sizes {
+                20
+            } else {
+                0
+            };
+        let packed_size = if compression == Compression::Stored {
+            body_size
+        } else {
+            0
+        };
+        self.check_archive_budget(local_size.to_u64(), packed_size.to_u64(), metadata_size.to_u64())?;
         let data = zeros(size);
         reader.read_exact(data.as_mut_slice()).map_err(
             |error| failure(ErrorKind::Io, 0, error.to_string()),

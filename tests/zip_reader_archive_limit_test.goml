@@ -1,0 +1,75 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Compression, Entry, ErrorKind, Header, Limits, ZipWriter};
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn zip_reader_preflights_known_archive_bytes_and_keeps_the_source_for_retry() -> () {
+    let mut long_name = "name";
+    for _ in 0..5 {
+        long_name += long_name;
+    }
+    for force_zip64 in Vec::from_array([false, true]) {
+        for existing in Vec::from_array([false, true]) {
+            for compression in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+                let expected = io::Cursor::new(bytes::Bytes::new());
+                let reference = testing::expect_ok(
+                    ZipWriter::with_zip64(expected, Limits::standard(), force_zip64),
+                    "reference",
+                );
+                if existing {
+                    testing::assert_ok(reference.append(Entry::directory("first"), compression));
+                }
+                testing::assert_ok(
+                    reference.append(
+                        Entry::file("ok", bytes::Bytes::from_string("payload")),
+                        compression,
+                    ),
+                );
+                testing::assert_ok(reference.finish(""));
+                let limits = Limits {
+                    max_archive_bytes: expected.bytes().len(),
+                    ..Limits::standard(),
+                };
+                let output = io::Cursor::new(bytes::Bytes::new());
+                let writer = testing::expect_ok(
+                    ZipWriter::with_zip64(output, limits, force_zip64),
+                    "writer",
+                );
+                if existing {
+                    testing::assert_ok(writer.append(Entry::directory("first"), compression));
+                }
+                let before = output.bytes().len();
+                let source = CountedZipSource {
+                    cursor: io::Cursor::new(bytes::Bytes::from_string("payload!")),
+                    calls: Ref::new(0),
+                };
+                let name = if compression == Compression::Stored {
+                    "ok"
+                } else {
+                    long_name
+                };
+                let rejected = writer.append_reader(Header::file(name), 8, source, compression);
+                testing::assert_eq(
+                    testing::expect_err(rejected, "known archive budget").kind,
+                    ErrorKind::Limit,
+                );
+                testing::assert_eq(source.calls.get(), 0);
+                testing::assert_eq(source.cursor.position(), 0);
+                testing::assert_eq(output.bytes().len(), before);
+                testing::assert_ok(writer.append_reader(Header::file("ok"), 7, source, compression));
+                testing::assert_ok(writer.finish(""));
+                testing::assert_eq(output.bytes().len(), limits.max_archive_bytes);
+                let entries = testing::expect_ok(
+                    archive::decode_zip(output.bytes(), limits),
+                    "exact-budget retry",
+                );
+                testing::assert(entries[entries.len() - 1].data.to_vec() == b"payload");
+                testing::assert_eq(source.cursor.position(), 7);
+            }
+        }
+    }
+}

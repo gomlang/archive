@@ -84,6 +84,9 @@ ZIP reader appends validate paths, comments, timestamps, entry types, declared
 non-file payloads and known central-directory metadata costs before consuming
 input. A rejected header can be corrected and retried using the same untouched
 source.
+The reader preflight also reserves known local headers, the complete central
+directory and the end records against the archive-byte budget. Stored payload
+sizes are known in advance; Deflate payload sizes are checked after compression.
 
 Generic reads also propagate interruptions immediately without retry. A failing
 read may already have consumed bytes or modified the destination buffer without
