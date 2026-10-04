@@ -1,0 +1,145 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Compression, Entry, ErrorKind, Limits, ZipArchive, ZipSource, ZipWriter};
+use std::bytes;
+use std::encoding::hex;
+use std::io;
+use std::testing;
+
+// Python 3.12 zipfile: ZIP64_LIMIT=0, open(ZipInfo("x"), "w", force_zip64=True),
+// then write b"raw\0\xffbody"; creator and external attributes are set to zero.
+// The classic EOCD retains the small count/size/offset.
+
+fn optional_zip64_fixture() -> bytes::Bytes {
+    testing::expect_ok(
+        hex::decode(
+            "504b03042d0000000000000021005fa25a3dffffffffffffffff0100140078010010000900000000000000090000000000000072617700ff626f6479504b01022d002d0000000000000021005fa25a3dffffffffffffffff010014000000000000000000000000000000780100100009000000000000000900000000000000504b06062c000000000000002d002d0000000000000000000100000000000000010000000000000043000000000000003c00000000000000504b0607000000007f0000000000000001000000504b05060000000001000100430000003c0000000000",
+        ),
+        "Python ZIP64 fixture",
+    )
+}
+
+fn check_optional_zip64(data: bytes::Bytes, comment: string) -> () {
+    let limits = Limits::standard();
+    let memory = testing::expect_ok(ZipArchive::open(data, limits), "optional ZIP64 memory");
+    let source = testing::expect_ok(
+        ZipSource::open(io::Cursor::new(data), data.len(), limits),
+        "optional ZIP64 source",
+    );
+    let sequential = testing::expect_ok(
+        ZipArchive::read(io::Cursor::new(data), limits),
+        "optional ZIP64 reader",
+    );
+    testing::assert_eq(memory.comment(), comment);
+    testing::assert_eq(source.comment(), comment);
+    let expected = testing::expect_ok(hex::decode("72617700ff626f6479"), "body");
+    for entry in[
+        testing::expect_ok(memory.entry(0), "memory body"),
+        testing::expect_ok(source.entry(0), "source body"),
+        testing::expect_ok(sequential.entry(0), "reader body"),
+    ] {
+        testing::assert_eq(entry.header.path, "x");
+        testing::assert(entry.data.to_vec() == expected.to_vec());
+    }
+    testing::assert_eq(memory.len(), 1);
+    testing::assert_eq(source.len(), 1);
+    let output = io::Cursor::new(bytes::Bytes::new());
+    testing::assert_ok(source.copy_entry(0, output));
+    testing::assert(output.bytes().to_vec() == expected.to_vec());
+}
+
+#[test]
+fn zip64_end_accepts_small_classic_fields_and_maximum_comments() -> () {
+    let data = optional_zip64_fixture();
+    check_optional_zip64(data, "");
+    let commented = data.copy();
+    zip64_set(commented, data.len() - 2, 65535, 2);
+    let comment = bytes::Bytes::new();
+    for _ in 0..65535 {
+        comment.push(b'a');
+    }
+    commented.extend_from_slice(comment.as_slice());
+    check_optional_zip64(commented, "a".repeat(65535));
+}
+
+#[test]
+fn zip64_optional_records_retain_bounds_and_budget_checks() -> () {
+    let data = optional_zip64_fixture();
+    for field in[203 + 8, 203 + 12, 203 + 16] {
+        let inconsistent = data.copy();
+        zip64_set(inconsistent, field, 0, 4);
+        testing::assert_eq(
+            testing::expect_err(
+                ZipArchive::open(inconsistent, Limits::standard()),
+                "inconsistent memory",
+            ).kind,
+            ErrorKind::Invalid,
+        );
+        testing::assert_eq(
+            testing::expect_err(
+                ZipSource::open(
+                    io::Cursor::new(inconsistent),
+                    inconsistent.len(),
+                    Limits::standard(),
+                ),
+                "inconsistent source",
+            ).kind,
+            ErrorKind::Invalid,
+        );
+    }
+    for field in[127 + 4, 127 + 40, 127 + 48, 183 + 8] {
+        let broken = data.copy();
+        zip64_set(broken, field, 18446744073709551615, 8);
+        testing::assert(ZipArchive::open(broken, Limits::standard()).is_err());
+        testing::assert(
+            ZipSource::open(io::Cursor::new(broken), broken.len(), Limits::standard()).is_err(),
+        );
+    }
+    for limits in[
+        Limits { max_entries: 0, ..Limits::standard() },
+        Limits { max_metadata_bytes: 66, ..Limits::standard() },
+    ] {
+        testing::assert_eq(
+            testing::expect_err(ZipArchive::open(data, limits), "memory quota").kind,
+            ErrorKind::Limit,
+        );
+        testing::assert_eq(
+            testing::expect_err(
+                ZipSource::open(io::Cursor::new(data), data.len(), limits),
+                "source quota",
+            ).kind,
+            ErrorKind::Limit,
+        );
+    }
+    let short = bytes::Bytes::from_slice_copy(data.slice(183, data.len()));
+    testing::assert_eq(
+        testing::expect_err(ZipArchive::open(short, Limits::standard()), "short memory").kind,
+        ErrorKind::Invalid,
+    );
+    testing::assert_eq(
+        testing::expect_err(
+            ZipSource::open(io::Cursor::new(short), short.len(), Limits::standard()),
+            "short source",
+        ).kind,
+        ErrorKind::Invalid,
+    );
+}
+
+#[test]
+fn classic_directory_comment_is_not_a_zip64_locator() -> () {
+    let output = io::Cursor::new(bytes::Bytes::new());
+    let writer = testing::expect_ok(ZipWriter::new(output, Limits::standard()), "writer");
+    let mut entry = Entry::file("x", bytes::Bytes::from_string("value"));
+    entry.header.comment = "PK\u0006\u0007abcdefghijklmnop";
+    testing::assert_ok(writer.append(entry, Compression::Stored));
+    testing::assert_ok(writer.finish(""));
+    let data = output.bytes();
+    let memory = testing::expect_ok(ZipArchive::open(data, Limits::standard()), "classic memory");
+    let source = testing::expect_ok(
+        ZipSource::open(io::Cursor::new(data), data.len(), Limits::standard()),
+        "classic source",
+    );
+    testing::assert_eq(memory.records()[0].header.comment, entry.header.comment);
+    testing::assert_eq(source.records()[0].header.comment, entry.header.comment);
+}

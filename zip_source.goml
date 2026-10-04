@@ -61,19 +61,22 @@ fn zip_directory_at[R: ReadAt](reader: R, size: isize, limits: Limits) -> Result
     let mut directory_size = le(tail, relative + 12, 4)?;
     let mut start = le(tail, relative + 16, 4)?;
     let mut directory_end = end;
-    if count == 65535 || directory_size == 4294967295 || start == 4294967295 {
-        if end < 20 {
-            return Result::Err(failure(ErrorKind::Invalid, end, "missing ZIP64 locator"))
-        }
-        let locator = zip_at(reader, end - 20, 20, size)?;
-        if le(locator, 0, 4)? != 0x07064b50 {
+    let required = count == 65535 || directory_size == 4294967295 || start == 4294967295;
+    let classic_bounds = start <= end.to_u64() && directory_size == end.to_u64() - start;
+    let locator = if (required || !classic_bounds) && end >= 20 {
+        zip_at(reader, end - 20, 20, size)?
+    } else {
+        bytes::Bytes::new()
+    };
+    if required || !locator.is_empty() && le(locator, 0, 4)? == 0x07064b50 {
+        if locator.len() < 20 || le(locator, 0, 4)? != 0x07064b50 {
             return Result::Err(failure(ErrorKind::Invalid, end, "missing ZIP64 locator"))
         }
         if le(locator, 4, 4)? != 0 || le(locator, 16, 4)? != 1 {
             return Result::Err(failure(ErrorKind::Unsupported, end, "split ZIP64 archive"))
         }
         let record_offset = le(locator, 8, 8)?;
-        if record_offset > (end - 76).to_u64() {
+        if end < 76 || record_offset > (end - 76).to_u64() {
             return Result::Err(failure(ErrorKind::Invalid, end, "ZIP64 record offset"))
         }
         let record = zip_at(reader, record_offset.to_isize(), 56, size)?;
@@ -84,12 +87,20 @@ fn zip_directory_at[R: ReadAt](reader: R, size: isize, limits: Limits) -> Result
         if le(record, 16, 4)? != 0 || le(record, 20, 4)? != 0 {
             return Result::Err(failure(ErrorKind::Unsupported, end, "split ZIP64 archive"))
         }
-        count = le(record, 32, 8)?;
-        if le(record, 24, 8)? != count {
+        let wide_count = le(record, 32, 8)?;
+        if le(record, 24, 8)? != wide_count {
             return Result::Err(failure(ErrorKind::Unsupported, end, "split ZIP64 archive"))
         }
-        directory_size = le(record, 40, 8)?;
-        start = le(record, 48, 8)?;
+        let wide_size = le(record, 40, 8)?;
+        let wide_start = le(record, 48, 8)?;
+        if !required && (count != wide_count || directory_size != wide_size || start != wide_start) {
+            return Result::Err(
+                failure(ErrorKind::Invalid, end, "ZIP64 and classic directory fields disagree"),
+            )
+        }
+        count = wide_count;
+        directory_size = wide_size;
+        start = wide_start;
         directory_end = record_offset.to_isize();
     }
     if count > limits.max_entries.to_u64() || directory_size > limits.max_metadata_bytes.to_u64() {

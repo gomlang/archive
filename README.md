@@ -203,7 +203,9 @@ permissions are kept traversable while extracting.
 
 - ZIP64 end records, entry extra fields and 64-bit descriptors can be read
   within limits. ZIP64 writing is automatic when classic fields overflow and
-  may be forced through `ZipWriter::with_zip64`.
+  may be forced through `ZipWriter::with_zip64`. Readers also recognize ZIP64
+  end records when the classic count, size and offset retain their small values;
+  in this form, the two records must agree on those values.
 - Split/encrypted archives, non-Deflate compression, legacy non-ASCII
   codepage names, TAR devices/FIFOs and GNU sparse extensions produce
   recoverable errors.
