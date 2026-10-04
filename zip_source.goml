@@ -278,7 +278,7 @@ impl[R: ReadAt] ZipSource[R] {
         if record.header.kind == EntryKind::Symlink {
             return Result::Ok(
                 Entry {
-                    header: Header { link: text(data)?, ..record.header },
+                    header: Header { link: zip_link(data, record.data_offset)?, ..record.header },
                     data: bytes::Bytes::new(),
                 },
             )

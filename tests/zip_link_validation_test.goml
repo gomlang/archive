@@ -1,0 +1,97 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Compression, Entry, EntryKind, ErrorKind, Limits, ZipArchive, ZipSource, ZipWriter};
+use std::bytes;
+use std::io;
+use std::testing;
+
+fn zip_link_payload(target: string, compression: Compression, wide: bool) -> bytes::Bytes {
+    let output = io::Cursor::new(bytes::Bytes::new());
+    let writer = testing::expect_ok(
+        ZipWriter::with_zip64(output, Limits::standard(), wide),
+        "writer",
+    );
+    testing::assert_ok(
+        writer.append(Entry::file("link", bytes::Bytes::from_string(target)), compression),
+    );
+    testing::assert_ok(
+        writer.append(Entry::file("next", bytes::Bytes::from_string("contents")), compression),
+    );
+    testing::assert_ok(writer.finish(""));
+    let packed = output.bytes();
+    let central = signature(packed, Vec::from_array([0x50, 0x4b, 0x01, 0x02]));
+    little(packed, central + 38, (0o120777).to_u64() << 16, 4);
+    packed
+}
+
+#[test]
+fn zip_symlink_targets_reject_nul_when_bodies_are_read() -> () {
+    for compression in[Compression::Stored, Compression::Deflate] {
+        for wide in[false, true] {
+            for target in["\u0000target", "tar\u0000get", "target\u0000"] {
+                let packed = zip_link_payload(target, compression, wide);
+                let limits = Limits::standard();
+                let memory = testing::expect_ok(ZipArchive::open(packed, limits), "memory index");
+                let source = testing::expect_ok(
+                    ZipSource::open(io::Cursor::new(packed), packed.len(), limits),
+                    "random-access index",
+                );
+                testing::assert_eq(memory.records()[0].header.kind, EntryKind::Symlink);
+                testing::assert_eq(source.records()[0].header.kind, EntryKind::Symlink);
+                testing::assert_eq(
+                    testing::expect_err(memory.entry(0), "NUL link in memory").kind,
+                    ErrorKind::Path,
+                );
+                testing::assert_eq(
+                    testing::expect_err(source.entry(0), "NUL link from source").kind,
+                    ErrorKind::Path,
+                );
+                testing::assert_eq(
+                    testing::expect_err(archive::decode_zip(packed, limits), "NUL link in decode").kind,
+                    ErrorKind::Path,
+                );
+                let output = io::Cursor::new(bytes::Bytes::new());
+                testing::assert_eq(
+                    testing::expect_err(memory.copy_entry(0, output), "NUL link in copy").kind,
+                    ErrorKind::Path,
+                );
+                testing::assert_eq(
+                    testing::expect_err(source.copy_entry(0, output), "NUL source link in copy").kind,
+                    ErrorKind::Path,
+                );
+                testing::assert(output.bytes().is_empty());
+                testing::assert_eq(
+                    testing::expect_ok(memory.entry(1), "later entry").header.path,
+                    "next",
+                );
+                testing::assert_eq(
+                    testing::expect_ok(source.entry(1), "later source entry").header.path,
+                    "next",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn zip_symlink_targets_keep_valid_text_and_empty_payloads() -> () {
+    for compression in[Compression::Stored, Compression::Deflate] {
+        for target in["", "../目标", "/absolute/path"] {
+            let packed = zip_link_payload(target, compression, false);
+            let memory = testing::expect_ok(
+                ZipArchive::open(packed, Limits::standard()),
+                "memory index",
+            );
+            let source = testing::expect_ok(
+                ZipSource::open(io::Cursor::new(packed), packed.len(), Limits::standard()),
+                "random-access index",
+            );
+            testing::assert_eq(testing::expect_ok(memory.entry(0), "link").header.link, target);
+            testing::assert_eq(
+                testing::expect_ok(source.entry(0), "source link").header.link,
+                target,
+            );
+        }
+    }
+}

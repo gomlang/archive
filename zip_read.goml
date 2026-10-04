@@ -136,6 +136,15 @@ fn zip_name(data: bytes::Bytes, flags: u64) -> Result[string, Error] {
     Result::Ok(name)
 }
 
+fn zip_link(data: bytes::Bytes, offset: isize) -> Result[string, Error] {
+    let link = text(data)?;
+    if link.contains("\u0000") {
+        Result::Err(failure(ErrorKind::Path, offset, "invalid ZIP link target"))
+    } else {
+        Result::Ok(link)
+    }
+}
+
 fn zip_kind(name: string, mode: u32) -> Result[EntryKind, Error] {
     let kind = mode & 0o170000;
     if kind == 0o120000 {

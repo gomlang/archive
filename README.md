@@ -119,6 +119,8 @@ and sizes are matched against the directory before choosing a signed or unsigned
 layout, for both classic and ZIP64 descriptors and both indexing APIs.
 ZIP directory ranges are checked in sorted
 order to reject overlapping entries without quadratic pairwise validation.
+ZIP symbolic-link targets are decoded as UTF-8 and reject NUL when an entry body
+is read or copied; indexing alone does not read or validate those target bytes.
 
 `Limits` bounds entries, individual expanded bytes, total expanded bytes,
 archive bytes, path bytes, and metadata bytes. Decompression is bounded before
