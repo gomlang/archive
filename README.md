@@ -114,6 +114,9 @@ Default limits are 100,000 entries, 64 MiB per entry, 256 MiB expanded total,
 entry counts and offsets to its non-ZIP64 ranges. In TAR streaming APIs the
 archive limit counts consumed/emitted bytes; `decode_tar` additionally verifies
 that trailing bytes after the end marker are zero.
+Both `encode_tar_gz` and `decode_tar_gz` apply the archive-byte limit to the
+uncompressed TAR and the compressed GZIP representation. Compression can enlarge
+incompressible inputs; exceeding either budget returns `Limit`.
 
 ### DOS modification timestamps
 

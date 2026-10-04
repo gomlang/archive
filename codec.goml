@@ -5,9 +5,13 @@ use ecosystem::compress::gzip as shared_gzip;
 use std::bytes;
 
 pub fn gzip(data: bytes::Bytes) -> Result[bytes::Bytes, Error] {
+    gzip_with_limit(data, 9223372036854775807)
+}
+
+fn gzip_with_limit(data: bytes::Bytes, limit: isize) -> Result[bytes::Bytes, Error] {
     let limits = compress::Limits {
         max_input_bytes: data.len(),
-        max_output_bytes: 9223372036854775807,
+        max_output_bytes: limit,
         max_blocks: 9223372036854775807,
         max_work: 9223372036854775807,
     };

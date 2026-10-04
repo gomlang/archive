@@ -1,0 +1,65 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Entry, ErrorKind, Limits};
+use std::bytes;
+use std::testing;
+
+#[test]
+fn tar_gz_checks_compressed_and_uncompressed_archive_budgets() -> () {
+    let data = bytes::Bytes::new();
+    let mut seed: u32 = 0x12345678;
+    for _ in 0..30720 {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        data.push(seed.to_u8());
+    }
+    let entries = Vec::from_array([Entry::file("data", data)]);
+    let tar = testing::expect_ok(archive::encode_tar(entries, Limits::standard()), "plain TAR");
+    let gzip = testing::expect_ok(archive::gzip(tar), "incompressible TAR");
+    testing::assert(gzip.len() > tar.len());
+    for budget in Vec::from_array([tar.len(), gzip.len() - 1]) {
+        let limits = Limits { max_archive_bytes: budget, ..Limits::standard() };
+        testing::assert_eq(
+            testing::expect_err(
+                archive::encode_tar_gz(entries, limits),
+                "compressed archive budget",
+            ).kind,
+            ErrorKind::Limit,
+        );
+    }
+    let limits = Limits { max_archive_bytes: gzip.len(), ..Limits::standard() };
+    let encoded = testing::expect_ok(
+        archive::encode_tar_gz(entries, limits),
+        "exact compressed budget",
+    );
+    testing::assert_eq(encoded.len(), gzip.len());
+    let decoded = testing::expect_ok(
+        archive::decode_tar_gz(encoded, limits),
+        "same-limit roundtrip",
+    );
+    testing::assert_eq(decoded.len(), 1);
+    testing::assert(decoded[0].data.to_vec() == data.to_vec());
+    let compressible = Vec::from_array([Entry::file("small", bytes::Bytes::from_string("x"))]);
+    let plain = testing::expect_ok(
+        archive::encode_tar(compressible, Limits::standard()),
+        "small TAR",
+    );
+    let small_gzip = testing::expect_ok(archive::gzip(plain), "compressed small TAR");
+    testing::assert(small_gzip.len() < plain.len());
+    let too_small = Limits { max_archive_bytes: plain.len() - 1, ..Limits::standard() };
+    testing::assert_eq(
+        testing::expect_err(
+            archive::encode_tar_gz(compressible, too_small),
+            "uncompressed archive budget",
+        ).kind,
+        ErrorKind::Limit,
+    );
+    let exact = Limits { max_archive_bytes: plain.len(), ..Limits::standard() };
+    let encoded_small = testing::expect_ok(
+        archive::encode_tar_gz(compressible, exact),
+        "exact uncompressed budget",
+    );
+    testing::assert_ok(archive::decode_tar_gz(encoded_small, exact));
+}

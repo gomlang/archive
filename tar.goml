@@ -816,7 +816,7 @@ pub fn decode_tar(data: bytes::Bytes, limits: Limits) -> Result[Vec[Entry], Erro
 }
 
 pub fn encode_tar_gz(entries: Vec[Entry], limits: Limits) -> Result[bytes::Bytes, Error] {
-    gzip(encode_tar(entries, limits)?)
+    gzip_with_limit(encode_tar(entries, limits)?, limits.max_archive_bytes)
 }
 
 pub fn decode_tar_gz(data: bytes::Bytes, limits: Limits) -> Result[Vec[Entry], Error] {
