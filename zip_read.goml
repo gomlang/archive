@@ -145,6 +145,25 @@ fn zip_link(data: bytes::Bytes, offset: isize) -> Result[string, Error] {
     }
 }
 
+fn zip_mode(creator: u64, attributes: u64) -> u32 {
+    if creator == 3 || creator == 19 {
+        return (attributes >> 16).to_u32()
+    }
+    if creator == 0 || creator == 10 || creator == 14 {
+        let mode: u32 = if attributes & 0x10 != 0 {
+            0o040777
+        } else {
+            0o100666
+        };
+        return if attributes & 1 != 0 {
+            mode & 0o177555
+        } else {
+            mode
+        }
+    }
+    0
+}
+
 fn zip_kind(name: string, mode: u32) -> Result[EntryKind, Error] {
     let kind = mode & 0o170000;
     if kind == 0o120000 {
@@ -213,7 +232,7 @@ fn zip_central(
         0
     };
     let comment = text(part(data, offset + 46 + name_len + extra_len, comment_len)?)?;
-    let mode = (le(data, offset + 38, 4)? >> 16).to_u32();
+    let mode = zip_mode(le(data, offset + 5, 1)?, le(data, offset + 38, 4)?);
     let kind = zip_kind(path, mode)?;
     let local_raw = le(data, offset + 42, 4)?;
     let (size, compressed_size, local) = zip64_values(extra, size_raw, packed_raw, local_raw)?;

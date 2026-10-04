@@ -1,0 +1,209 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Compression, Entry, EntryKind, ErrorKind, Limits, ZipArchive, ZipSource};
+use std::bytes;
+use std::io;
+use std::testing;
+
+fn zip_attribute_fixture(
+    creator: u64,
+    attributes: u64,
+    name: string,
+    data: bytes::Bytes,
+    compression: Compression,
+) -> bytes::Bytes {
+    let entry = if name.ends_with("/") {
+        Entry::directory(name)
+    } else {
+        Entry::file(name, data)
+    };
+    let packed = testing::expect_ok(
+        archive::encode_zip(Vec::from_array([entry]), compression, Limits::standard()),
+        "fixture",
+    );
+    let central = signature(packed, Vec::from_array([0x50, 0x4b, 0x01, 0x02]));
+    little(packed, central + 4, (creator << 8) | 20, 2);
+    little(packed, central + 38, attributes, 4);
+    packed
+}
+
+fn check_zip_attributes(
+    packed: bytes::Bytes,
+    expected_kind: EntryKind,
+    expected_mode: u32,
+    payload: bytes::Bytes,
+) -> () {
+    let limits = Limits::standard();
+    let memory = testing::expect_ok(ZipArchive::open(packed, limits), "memory index");
+    let source = testing::expect_ok(
+        ZipSource::open(io::Cursor::new(packed), packed.len(), limits),
+        "source index",
+    );
+    for header in[memory.records()[0].header, source.records()[0].header] {
+        testing::assert_eq(header.kind, expected_kind);
+        testing::assert_eq(header.mode, expected_mode);
+    }
+    for entry in[
+        testing::expect_ok(memory.entry(0), "entry"),
+        testing::expect_ok(source.entry(0), "source entry"),
+    ] {
+        testing::assert_eq(entry.header.kind, expected_kind);
+        testing::assert_eq(entry.header.mode, expected_mode);
+        if expected_kind == EntryKind::Symlink {
+            testing::assert_eq(entry.header.link, "../target");
+            testing::assert(entry.data.is_empty());
+        } else {
+            testing::assert(entry.data.to_vec() == payload.to_vec());
+        }
+    }
+    let output = io::Cursor::new(bytes::Bytes::new());
+    testing::assert_ok(memory.copy_entry(0, output));
+    let other_output = io::Cursor::new(bytes::Bytes::new());
+    testing::assert_ok(source.copy_entry(0, other_output));
+    let expected = if expected_kind == EntryKind::Symlink {
+        bytes::Bytes::new()
+    } else {
+        payload
+    };
+    testing::assert(output.bytes().to_vec() == expected.to_vec());
+    testing::assert(other_output.bytes().to_vec() == expected.to_vec());
+}
+
+#[test]
+fn zip_dos_attributes_use_directory_and_readonly_bits() -> () {
+    for creator in[0, 10, 14] {
+        for compression in[Compression::Stored, Compression::Deflate] {
+            for readonly in[false, true] {
+                let bit = if readonly {
+                    1
+                } else {
+                    0
+                };
+                let mode = if readonly {
+                    0o444
+                } else {
+                    0o666
+                };
+                let payload = bytes::Bytes::from_slice_copy(
+                    Vec::from_array([0.to_u8(), 255.to_u8()]).as_slice(),
+                );
+                for high in[0, (0o120777).to_u64() << 16, (0o060640).to_u64() << 16] {
+                    check_zip_attributes(
+                        zip_attribute_fixture(creator, high | bit, "file", payload, compression),
+                        EntryKind::File,
+                        mode,
+                        payload,
+                    );
+                }
+                let empty = bytes::Bytes::new();
+                check_zip_attributes(
+                    zip_attribute_fixture(creator, 0x10 | bit, "directory", empty, compression),
+                    EntryKind::Directory,
+                    mode | 0o111,
+                    empty,
+                );
+                check_zip_attributes(
+                    zip_attribute_fixture(creator, bit, "directory/", empty, compression),
+                    EntryKind::Directory,
+                    mode,
+                    empty,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn zip_unix_attributes_remain_specific_to_unix_and_macos_creators() -> () {
+    for creator in[3, 19] {
+        let payload = bytes::Bytes::from_string("../target");
+        check_zip_attributes(
+            zip_attribute_fixture(
+                creator,
+                (0o100640).to_u64() << 16 | 0x11,
+                "file",
+                payload,
+                Compression::Stored,
+            ),
+            EntryKind::File,
+            0o640,
+            payload,
+        );
+        check_zip_attributes(
+            zip_attribute_fixture(
+                creator,
+                (0o120777).to_u64() << 16,
+                "link",
+                payload,
+                Compression::Deflate,
+            ),
+            EntryKind::Symlink,
+            0o777,
+            payload,
+        );
+        let empty = bytes::Bytes::new();
+        check_zip_attributes(
+            zip_attribute_fixture(
+                creator,
+                (0o040700).to_u64() << 16,
+                "directory",
+                empty,
+                Compression::Stored,
+            ),
+            EntryKind::Directory,
+            0o700,
+            empty,
+        );
+        let special = zip_attribute_fixture(
+            creator,
+            (0o060640).to_u64() << 16,
+            "device",
+            empty,
+            Compression::Stored,
+        );
+        testing::assert_eq(
+            testing::expect_err(ZipArchive::open(special, Limits::standard()), "Unix device").kind,
+            ErrorKind::Unsupported,
+        );
+        testing::assert_eq(
+            testing::expect_err(
+                ZipSource::open(io::Cursor::new(special), special.len(), Limits::standard()),
+                "Unix source device",
+            ).kind,
+            ErrorKind::Unsupported,
+        );
+    }
+}
+
+#[test]
+fn zip_unknown_creators_do_not_turn_attributes_into_unix_links() -> () {
+    for creator in[1, 7, 11, 16, 255] {
+        let payload = bytes::Bytes::from_string("data\u0000body");
+        check_zip_attributes(
+            zip_attribute_fixture(
+                creator,
+                (0o120777).to_u64() << 16,
+                "file",
+                payload,
+                Compression::Stored,
+            ),
+            EntryKind::File,
+            0,
+            payload,
+        );
+        let empty = bytes::Bytes::new();
+        check_zip_attributes(
+            zip_attribute_fixture(
+                creator,
+                (0o120777).to_u64() << 16,
+                "directory/",
+                empty,
+                Compression::Stored,
+            ),
+            EntryKind::Directory,
+            0,
+            empty,
+        );
+    }
+}

@@ -121,6 +121,14 @@ ZIP directory ranges are checked in sorted
 order to reject overlapping entries without quadratic pairwise validation.
 ZIP symbolic-link targets are decoded as UTF-8 and reject NUL when an entry body
 is read or copied; indexing alone does not read or validate those target bytes.
+ZIP external attributes are interpreted using the creator platform: Unix (3)
+and macOS (19) use the upper Unix mode bits; MS-DOS (0), NTFS (10) and VFAT (14)
+use the DOS directory and read-only bits. The DOS-to-POSIX permission mapping
+is `0777` for an attribute-marked directory and `0666` otherwise, with write bits
+removed for read-only entries. This represents metadata, not Windows access
+checks. Other creators have mode zero. A trailing `/` also identifies a directory
+without changing permissions; an explicit Unix symbolic-link type takes
+precedence over the suffix.
 
 `Limits` bounds entries, individual expanded bytes, total expanded bytes,
 archive bytes, path bytes, and metadata bytes. Decompression is bounded before
