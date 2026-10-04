@@ -70,6 +70,9 @@ fn zip_prepare_header(header: Header, size: isize, limits: Limits) -> Result[
     Error,
 ] {
     validate_entry(Entry { header, data: bytes::Bytes::new() }, limits)?;
+    if header.kind == EntryKind::File && header.path.ends_with("/") {
+        return Result::Err(failure(ErrorKind::Path, 0, "ZIP file path has directory suffix"))
+    }
     if size > limits.max_entry_bytes {
         return Result::Err(failure(ErrorKind::Limit, 0, "entry size exceeds limit"))
     }

@@ -1,0 +1,55 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Compression, Entry, EntryKind, ErrorKind, Header, Limits, ZipWriter};
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn zip_file_names_cannot_use_the_directory_suffix() -> () {
+    for payload in Vec::from_array(["", "contents"]) {
+        for compression in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+            for force_zip64 in Vec::from_array([false, true]) {
+                for use_reader in Vec::from_array([false, true]) {
+                    let limits = Limits::standard();
+                    let output = io::Cursor::new(bytes::Bytes::new());
+                    let writer = testing::expect_ok(
+                        ZipWriter::with_zip64(output, limits, force_zip64),
+                        "writer",
+                    );
+                    let data = bytes::Bytes::from_string(payload);
+                    let source = CountedZipSource {
+                        cursor: io::Cursor::new(data),
+                        calls: Ref::new(0),
+                    };
+                    let result = if use_reader {
+                        writer.append_reader(Header::file("file/"), data.len(), source, compression)
+                    } else {
+                        writer.append(Entry::file("file/", data), compression)
+                    };
+                    testing::assert_eq(
+                        testing::expect_err(result, "file name with directory marker").kind,
+                        ErrorKind::Path,
+                    );
+                    testing::assert_eq(source.calls.get(), 0);
+                    testing::assert_eq(source.cursor.position(), 0);
+                    testing::assert_eq(output.bytes().len(), 0);
+                    testing::assert_ok(
+                        writer.append_reader(Header::file("file"), data.len(), source, compression),
+                    );
+                    testing::assert_ok(writer.append(Entry::directory("directory/"), compression));
+                    testing::assert_ok(writer.finish(""));
+                    let decoded = testing::expect_ok(
+                        archive::decode_zip(output.bytes(), limits),
+                        "recover with valid entry kinds",
+                    );
+                    testing::assert_eq(decoded.len(), 2);
+                    testing::assert_eq(decoded[0].header.kind, EntryKind::File);
+                    testing::assert(decoded[0].data.to_vec() == data.to_vec());
+                    testing::assert_eq(decoded[1].header.kind, EntryKind::Directory);
+                }
+            }
+        }
+    }
+}
