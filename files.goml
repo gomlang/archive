@@ -157,13 +157,12 @@ fn root_write(root: ExtractionRoot, path: string, data: bytes::Bytes, mode: u32)
 }
 
 pub fn safe_path(path: string, limit: isize) -> Result[string, Error] {
-    if path == "" || path.to_bytes().len() > limit || path.starts_with("/") || path.contains("\\")
+    if path == "" || path.byte_len() > limit || path.starts_with("/") || path.contains("\\")
         || path.contains(":")
         || path.contains("\u0000") {
         return Result::Err(failure(ErrorKind::Path, 0, "unsafe extraction path"))
     }
     let parts = path.split("/");
-    let mut result = "";
     for index in 0..parts.len() {
         let component = parts[index];
         if component == "" && index == parts.len() - 1 {
@@ -172,15 +171,12 @@ pub fn safe_path(path: string, limit: isize) -> Result[string, Error] {
         if component == "" || component == "." || component == ".." {
             return Result::Err(failure(ErrorKind::Path, 0, "unsafe extraction path component"))
         }
-        if result != "" {
-            result += "/";
-        }
-        result += component;
     }
-    if result == "" {
-        return Result::Err(failure(ErrorKind::Path, 0, "empty extraction path"))
+    if path.ends_with("/") {
+        Result::Ok(path.byte_slice(0, path.byte_len() - 1))
+    } else {
+        Result::Ok(path)
     }
-    Result::Ok(result)
 }
 
 pub fn extract(entries: Vec[Entry], destination: string, options: ExtractOptions) -> Result[

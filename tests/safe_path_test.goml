@@ -1,0 +1,29 @@
+package tests;
+
+use ecosystem::archive;
+use std::testing;
+
+#[test]
+fn safe_paths_preserve_spelling_and_enforce_original_byte_limits() -> () {
+    for path in["a", "a/b/file.txt", ".hidden", "..hidden", "name..", " a / b ", "目录/🙂"] {
+        testing::assert_eq(must(archive::safe_path(path, path.byte_len())), path);
+        testing::assert_eq(must(archive::safe_path(path + "/", path.byte_len() + 1)), path);
+        testing::assert_eq(
+            testing::expect_err(archive::safe_path(path + "/", path.byte_len()), "original bytes").kind,
+            archive::ErrorKind::Path,
+        );
+    }
+    let mut path = "a";
+    for _ in 0..2047 {
+        path += "/a";
+    }
+    testing::assert_eq(path.byte_len(), 4095);
+    testing::assert_eq(must(archive::safe_path(path, 4096)), path);
+    testing::assert_eq(must(archive::safe_path(path + "/", 4096)), path);
+    for invalid in[".", "..", "a/.", "a/..", "a/./", "a/../", "a//", "//", "/"] {
+        testing::assert_eq(
+            testing::expect_err(archive::safe_path(invalid, 4096), "invalid component").kind,
+            archive::ErrorKind::Path,
+        );
+    }
+}
