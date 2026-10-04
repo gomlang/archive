@@ -24,10 +24,12 @@ fn text(data: bytes::Bytes) -> Result[string, Error] {
 }
 
 fn le(data: bytes::Bytes, offset: isize, size: isize) -> Result[u64, Error] {
-    let field = part(data, offset, size)?;
+    if offset < 0 || size < 0 || offset > data.len() || size > data.len() - offset {
+        return Result::Err(failure(ErrorKind::Truncated, offset, "truncated field"))
+    }
     let mut value: u64 = 0;
     for index in 0..size {
-        value |= field.get(index).to_u64() << (index * 8).to_u64();
+        value |= data.get(offset + index).to_u64() << (index * 8).to_u64();
     }
     Result::Ok(value)
 }
