@@ -1,0 +1,79 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Entry, ErrorKind, Header, Limits, TarWriter};
+use std::bytes;
+use std::io;
+use io::Read;
+use std::testing;
+
+struct CountedTarSource {
+    cursor: io::Cursor,
+    calls: Ref[isize],
+}
+
+impl Read for CountedTarSource {
+    fn read(self: CountedTarSource, output: MutSlice[byte]) -> Result[isize, io::Error] {
+        self.calls.set(self.calls.get() + 1);
+        self.cursor.read(output)
+    }
+}
+
+#[test]
+fn tar_append_reserves_end_markers_before_consuming_the_source() -> () {
+    let mut long_name = "";
+    for _ in 0..140 {
+        long_name += "x";
+    }
+    for (name, size) in Vec::from_array([("too-large", 513), (long_name, 1)]) {
+        for existing in Vec::from_array([false, true]) {
+            let output = io::Cursor::new(bytes::Bytes::new());
+            let limit = if existing {
+                2560
+            } else {
+                2048
+            };
+            let limits = Limits { max_archive_bytes: limit, ..Limits::standard() };
+            let writer = testing::expect_ok(TarWriter::new(output, limits), "writer");
+            if existing {
+                testing::assert_ok(writer.append(Entry::directory("first")));
+            }
+            let before = output.bytes().len();
+            let body = bytes::Bytes::new();
+            for _ in 0..size {
+                body.push(b'x');
+            }
+            let source = CountedTarSource { cursor: io::Cursor::new(body), calls: Ref::new(0) };
+            let rejected = writer.append_reader(Header::file(name), size, source);
+            testing::assert_eq(source.calls.get(), 0);
+            testing::assert_eq(source.cursor.position(), 0);
+            testing::assert_eq(
+                testing::expect_err(rejected, "reserve final blocks").kind,
+                ErrorKind::Limit,
+            );
+            testing::assert_eq(output.bytes().len(), before);
+            let accepted = bytes::Bytes::new();
+            for _ in 0..512 {
+                accepted.push(b'a');
+            }
+            testing::assert_ok(writer.append(Entry::file("fits", accepted)));
+            testing::assert_ok(writer.finish());
+            testing::assert_eq(output.bytes().len(), limit);
+            let entries = testing::expect_ok(
+                archive::decode_tar(output.bytes(), limits),
+                "complete archive",
+            );
+            testing::assert_eq(
+                entries.len(),
+                if existing {
+                    2
+                } else {
+                    1
+                },
+            );
+            let last = entries[entries.len() - 1];
+            testing::assert_eq(last.header.path, "fits");
+            testing::assert(last.data.to_vec() == accepted.to_vec());
+        }
+    }
+}

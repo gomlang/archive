@@ -70,6 +70,10 @@ from the supplied source. ZIP reader appends also check the declared size agains
 the remaining expanded-byte budget and the entry-count limit before allocating
 or reading the body. A budget rejection leaves the writer available for a smaller
 entry or `finish`.
+TAR appends include the final two 512-byte end blocks in their archive-budget
+check before writing headers or reading the source. Rejecting an entry that would
+leave insufficient room for `finish` preserves the existing archive and permits
+a smaller entry or completion.
 
 Generic reads also propagate interruptions immediately without retry. A failing
 read may already have consumed bytes or modified the destination buffer without

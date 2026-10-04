@@ -328,7 +328,7 @@ impl[W: Write] TarWriter[W] {
             512 + record_bytes.len() + ((512 - record_bytes.len() % 512) % 512)
         };
         let padding = (512 - size % 512) % 512;
-        if size.to_u64() + padding.to_u64() + extra.to_u64() + 512
+        if size.to_u64() + padding.to_u64() + extra.to_u64() + 512 + 1024
             > (self.limits.max_archive_bytes - self.written.get()).to_u64() {
             return Result::Err(failure(ErrorKind::Limit, 0, "tar archive exceeds limit"))
         }
