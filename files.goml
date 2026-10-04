@@ -304,6 +304,7 @@ pub fn write_file(path: string, data: bytes::Bytes) -> Result[(), Error] {
 }
 
 pub fn open_zip(path: string, limits: Limits) -> Result[ZipArchive, Error] {
+    limits.validate()?;
     ZipArchive::open(read_file(path, limits.max_archive_bytes)?, limits)
 }
 
@@ -355,9 +356,11 @@ pub fn open_zip_source(path: string, limits: Limits) -> Result[ZipSource[ZipFile
 }
 
 pub fn open_tar(path: string, limits: Limits) -> Result[Vec[Entry], Error] {
+    limits.validate()?;
     decode_tar(read_file(path, limits.max_archive_bytes)?, limits)
 }
 
 pub fn open_tar_gz(path: string, limits: Limits) -> Result[Vec[Entry], Error] {
+    limits.validate()?;
     decode_tar_gz(read_file(path, limits.max_archive_bytes)?, limits)
 }

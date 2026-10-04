@@ -1,0 +1,42 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{ErrorKind, Limits};
+use std::testing;
+
+#[test]
+fn archive_file_helpers_validate_all_limits_before_opening() -> () {
+    let missing = "/dev/null/archive-cannot-be-opened";
+    for limits in[
+        Limits { max_entries: -1, ..Limits::standard() },
+        Limits { max_entry_bytes: -1, ..Limits::standard() },
+        Limits { max_total_bytes: -1, ..Limits::standard() },
+        Limits { max_archive_bytes: -1, ..Limits::standard() },
+        Limits { max_path_bytes: -1, ..Limits::standard() },
+        Limits { max_metadata_bytes: -1, ..Limits::standard() },
+    ] {
+        for result in[
+            archive::open_zip(missing, limits).map(|_| ()),
+            archive::open_zip_source(missing, limits).map(|_| ()),
+            archive::open_tar(missing, limits).map(|_| ()),
+            archive::open_tar_gz(missing, limits).map(|_| ()),
+        ] {
+            testing::assert_eq(
+                testing::expect_err(result, "invalid limits before file access").kind,
+                ErrorKind::Limit,
+            );
+        }
+    }
+    testing::assert_eq(
+        testing::expect_err(archive::open_zip(missing, Limits::standard()), "valid ZIP limits").kind,
+        ErrorKind::Io,
+    );
+    testing::assert_eq(
+        testing::expect_err(archive::open_tar(missing, Limits::standard()), "valid TAR limits").kind,
+        ErrorKind::Io,
+    );
+    testing::assert_eq(
+        testing::expect_err(archive::open_tar_gz(missing, Limits::standard()), "valid gzip limits").kind,
+        ErrorKind::Io,
+    );
+}

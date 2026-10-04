@@ -125,6 +125,7 @@ is read or copied; indexing alone does not read or validate those target bytes.
 `Limits` bounds entries, individual expanded bytes, total expanded bytes,
 archive bytes, path bytes, and metadata bytes. Decompression is bounded before
 returning a payload, and declared ZIP sizes are checked before decompression.
+File-opening helpers validate every limit before accessing the filesystem.
 Default limits are 100,000 entries, 64 MiB per entry, 256 MiB expanded total,
 512 MiB archive, 4 KiB paths and 1 MiB metadata. Classic ZIP additionally limits
 entry counts and offsets to its non-ZIP64 ranges. In TAR streaming APIs the
