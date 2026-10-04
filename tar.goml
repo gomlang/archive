@@ -4,21 +4,29 @@ use std::bytes;
 use std::io;
 use io::{Read, Write};
 
+fn tar_field_end(block: bytes::Bytes, offset: isize, length: isize) -> Result[isize, Error] {
+    if offset < 0 || length < 0 || offset > block.len() || length > block.len() - offset {
+        return Result::Err(failure(ErrorKind::Truncated, offset, "truncated field"))
+    }
+    Result::Ok(offset + length)
+}
+
 fn tar_string(block: bytes::Bytes, offset: isize, length: isize) -> Result[string, Error] {
-    let field = part(block, offset, length)?;
-    let mut end = 0;
-    while end < field.len() && field.get(end) != 0 {
+    let limit = tar_field_end(block, offset, length)?;
+    let mut end = offset;
+    while end < limit && block.get(end) != 0 {
         end += 1;
     }
-    text(part(field, 0, end)?)
+    text(part(block, offset, end - offset)?)
 }
 
 fn tar_octal(block: bytes::Bytes, offset: isize, length: isize) -> Result[u64, Error] {
-    let field = part(block, offset, length)?;
+    let end = tar_field_end(block, offset, length)?;
     let mut result: u64 = 0;
     let mut ended = false;
     let mut started = false;
-    for value in field.as_slice() {
+    for index in offset..end {
+        let value = block.get(index);
         if value == 0 || value == b' ' {
             if started {
                 ended = true;
@@ -35,13 +43,13 @@ fn tar_octal(block: bytes::Bytes, offset: isize, length: isize) -> Result[u64, E
 }
 
 fn tar_number(block: bytes::Bytes, offset: isize, length: isize) -> Result[u64, Error] {
-    let field = part(block, offset, length)?;
-    if field.get(0) != 0x80 {
+    let end = tar_field_end(block, offset, length)?;
+    if block.get(offset) != 0x80 {
         return tar_octal(block, offset, length)
     }
     let mut value: u64 = 0;
-    for index in 1..length {
-        let next = field.get(index).to_u64();
+    for index in offset + 1..end {
+        let next = block.get(index).to_u64();
         if value > (18446744073709551615 - next) / 256 {
             return Result::Err(failure(ErrorKind::Invalid, offset, "tar number overflow"))
         }
@@ -51,11 +59,11 @@ fn tar_number(block: bytes::Bytes, offset: isize, length: isize) -> Result[u64, 
 }
 
 fn tar_timestamp(block: bytes::Bytes, offset: isize, length: isize) -> Result[i64, Error] {
-    let field = part(block, offset, length)?;
-    if field.get(0) == 0xff {
+    let end = tar_field_end(block, offset, length)?;
+    if block.get(offset) == 0xff {
         let mut magnitude: u64 = 0;
-        for value in field.as_slice() {
-            let next = (255 - value).to_u64();
+        for index in offset..end {
+            let next = (255 - block.get(index)).to_u64();
             if magnitude > (9223372036854775807 - next) / 256 {
                 return Result::Err(failure(ErrorKind::Invalid, offset, "tar timestamp overflow"))
             }
