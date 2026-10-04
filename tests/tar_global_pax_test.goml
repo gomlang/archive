@@ -6,6 +6,10 @@ use std::bytes;
 use std::testing;
 
 fn global_pax_header(records: Vec[(string, string)]) -> bytes::Bytes {
+    pax_header(records, b'g')
+}
+
+fn pax_header(records: Vec[(string, string)], flag: byte) -> bytes::Bytes {
     let mut payload = "";
     for (key, value) in records {
         let body = " " + key + "=" + value + "\n";
@@ -23,7 +27,7 @@ fn global_pax_header(records: Vec[(string, string)]) -> bytes::Bytes {
         "USTAR template",
     );
     let header = bytes::Bytes::from_slice_copy(template.slice(0, 512));
-    header.set(156, b'g');
+    header.set(156, flag);
     let mut size = payload.byte_len();
     for index in 0..11 {
         header.set(134 - index, b'0' + (size & 7).to_u8());
@@ -107,5 +111,48 @@ fn tar_global_pax_superseded_numeric_values_are_not_applied() -> () {
     let packed = global_pax_header(Vec::from_array([("uid", "not-a-number"), ("uid", "42")]));
     packed.extend_from_slice(global_pax_file("file", true).as_slice());
     let entries = testing::expect_ok(archive::decode_tar(packed, Limits::standard()), "last UID");
+    testing::assert_eq(entries[0].header.uid, 42);
+}
+
+#[test]
+fn tar_local_pax_applies_only_final_values_without_changing_globals() -> () {
+    for separate_headers in Vec::from_array([false, true]) {
+        let packed = global_pax_header(
+            Vec::from_array([("uid", "50"), ("vendor.keep", "global"), ("vendor.shared", "global")]),
+        );
+        let first = Vec::from_array([("uid", "invalid"), ("vendor.shared", "first")]);
+        let last = Vec::from_array([("uid", "42"), ("vendor.shared", "last")]);
+        if separate_headers {
+            packed.extend_from_slice(pax_header(first, b'x').as_slice());
+            packed.extend_from_slice(pax_header(last, b'x').as_slice());
+        } else {
+            first.extend(last);
+            packed.extend_from_slice(pax_header(first, b'x').as_slice());
+        }
+        packed.extend_from_slice(global_pax_file("local", false).as_slice());
+        packed.extend_from_slice(global_pax_file("global", true).as_slice());
+        let entries = testing::expect_ok(
+            archive::decode_tar(packed, Limits::standard()),
+            "local override",
+        );
+        testing::assert_eq(entries[0].header.uid, 42);
+        testing::assert(
+            entries[0].header.pax
+                == Vec::from_array([("vendor.keep", "global"), ("vendor.shared", "last")]),
+        );
+        testing::assert_eq(entries[1].header.uid, 50);
+        testing::assert(
+            entries[1].header.pax
+                == Vec::from_array([("vendor.keep", "global"), ("vendor.shared", "global")]),
+        );
+    }
+}
+
+#[test]
+fn tar_local_pax_overrides_a_global_value_before_parsing_it() -> () {
+    let packed = global_pax_header(Vec::from_array([("uid", "invalid")]));
+    packed.extend_from_slice(pax_header(Vec::from_array([("uid", "42")]), b'x').as_slice());
+    packed.extend_from_slice(global_pax_file("local", true).as_slice());
+    let entries = testing::expect_ok(archive::decode_tar(packed, Limits::standard()), "local UID");
     testing::assert_eq(entries[0].header.uid, 42);
 }

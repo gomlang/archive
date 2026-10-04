@@ -706,7 +706,16 @@ impl[R: Read] TarReader[R] {
             let mut size = size_raw;
             let records = self.globals.get().copy();
             records.extend(local);
-            for (key, value) in records {
+            let last: HashMap[string, isize] = HashMap::new();
+            for index in 0..records.len() {
+                let (key, _) = records[index];
+                last.insert(key, index);
+            }
+            for index in 0..records.len() {
+                let (key, value) = records[index];
+                if last.get(key) != Option::Some(index) {
+                    continue
+                }
                 match key {
                     "path" => {
                         header = Header { path: value, ..header };

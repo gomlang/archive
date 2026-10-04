@@ -31,6 +31,8 @@ let first_file = indexed.entry(1)?;
   no longer retains it. Global/local PAX headers are applied during iteration.
   Within a global PAX header, the last record for each key replaces earlier
   records; an empty final value removes that key from the inherited metadata.
+  Local PAX values take precedence over globals for one entry. Repeated local
+  keys use their final value, and superseded values are not parsed or returned.
 - `ZipWriter[W: Write]` writes local headers and compressed bodies immediately,
   retaining the central directory and one bounded compression buffer. Both
   `append` and `append_reader` are available; `finish(comment)` emits the central
