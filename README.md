@@ -76,6 +76,10 @@ leave insufficient room for `finish` preserves the existing archive and permits
 a smaller entry or completion.
 ZIP directory paths include their automatically appended `/` when checking the
 path-byte limit, so every accepted path fits the same limit when read back.
+ZIP reader appends validate paths, comments, timestamps, entry types, declared
+non-file payloads and known central-directory metadata costs before consuming
+input. A rejected header can be corrected and retried using the same untouched
+source.
 
 Generic reads also propagate interruptions immediately without retry. A failing
 read may already have consumed bytes or modified the destination buffer without

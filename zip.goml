@@ -65,6 +65,40 @@ fn zip_extra(data: bytes::Bytes, fallback: i64) -> Result[i64, Error] {
     Result::Ok(timestamp)
 }
 
+fn zip_prepare_header(header: Header, size: isize, limits: Limits) -> Result[
+    (bytes::Bytes, bytes::Bytes, bytes::Bytes),
+    Error,
+] {
+    validate_entry(Entry { header, data: bytes::Bytes::new() }, limits)?;
+    if size > limits.max_entry_bytes {
+        return Result::Err(failure(ErrorKind::Limit, 0, "entry size exceeds limit"))
+    }
+    if header.kind != EntryKind::File && size != 0 {
+        return Result::Err(failure(ErrorKind::Invalid, 0, "non-file entry has payload"))
+    }
+    if header.kind == EntryKind::Hardlink {
+        return Result::Err(failure(ErrorKind::Unsupported, 0, "ZIP has no hardlink entry type"))
+    }
+    let name = if header.kind == EntryKind::Directory && !header.path.ends_with("/") {
+        header.path + "/"
+    } else {
+        header.path
+    };
+    if name.byte_len() > limits.max_path_bytes {
+        return Result::Err(failure(ErrorKind::Path, 0, "ZIP entry path exceeds limit"))
+    }
+    if name.byte_len() > 65535 || header.comment.byte_len() > 65535 {
+        return Result::Err(failure(ErrorKind::Limit, 0, "ZIP name or comment limit"))
+    }
+    Result::Ok(
+        (
+            bytes::Bytes::from_string(name),
+            bytes::Bytes::from_string(header.comment),
+            zip_time_extra(header.modified)?,
+        ),
+    )
+}
+
 pub struct ZipWriter[W] {
     writer: W,
     limits: Limits,
@@ -121,10 +155,11 @@ impl[W: Write] ZipWriter[W] {
         if self.done.get() || self.broken.get() {
             return Result::Err(failure(ErrorKind::Closed, 0, "ZIP writer closed or failed"))
         }
-        validate_entry(entry, self.limits)?;
-        if entry.header.kind == EntryKind::Hardlink {
-            return Result::Err(failure(ErrorKind::Unsupported, 0, "ZIP has no hardlink entry type"))
-        }
+        let (filename, comment, time_extra) = zip_prepare_header(
+            entry.header,
+            entry.data.len(),
+            self.limits,
+        )?;
         let data = if entry.header.kind == EntryKind::Symlink {
             bytes::Bytes::from_string(entry.header.link)
         } else {
@@ -134,19 +169,6 @@ impl[W: Write] ZipWriter[W] {
             || data.len() > self.limits.max_total_bytes - self.total.get()
             || self.count.get() >= self.limits.max_entries {
             return Result::Err(failure(ErrorKind::Limit, 0, "ZIP entry limit"))
-        }
-        let name = if entry.header.kind == EntryKind::Directory && !entry.header.path.ends_with("/") {
-            entry.header.path + "/"
-        } else {
-            entry.header.path
-        };
-        if name.byte_len() > self.limits.max_path_bytes {
-            return Result::Err(failure(ErrorKind::Path, 0, "ZIP entry path exceeds limit"))
-        }
-        let filename = bytes::Bytes::from_string(name);
-        let comment = bytes::Bytes::from_string(entry.header.comment);
-        if filename.len() > 65535 || comment.len() > 65535 {
-            return Result::Err(failure(ErrorKind::Limit, 0, "ZIP name or comment limit"))
         }
         let packed = match compression {
             Stored => data,
@@ -161,7 +183,6 @@ impl[W: Write] ZipWriter[W] {
             Deflate => 8,
         };
         let checksum = crc32(data).to_u64();
-        let time_extra = zip_time_extra(entry.header.modified)?;
         let local_extra = bytes::Bytes::new();
         let central_extra = bytes::Bytes::new();
         if wide_sizes {
@@ -341,6 +362,33 @@ impl[W: Write] ZipWriter[W] {
             || size > self.limits.max_total_bytes - self.total.get()
             || self.count.get() >= self.limits.max_entries {
             return Result::Err(failure(ErrorKind::Limit, 0, "ZIP entry size limit"))
+        }
+        let (filename, comment, time_extra) = zip_prepare_header(header, size, self.limits)?;
+        let body_size = if header.kind == EntryKind::Symlink {
+            header.link.byte_len()
+        } else {
+            size
+        };
+        let wide_sizes = self.force_zip64 || body_size.to_u64() >= 4294967295;
+        let wide_offset = self.force_zip64 || self.position.get().to_u64() >= 4294967295;
+        let metadata_size = 46 + filename.len() + comment.len() + time_extra.len()
+            + if wide_sizes || wide_offset {
+                4
+            } else {
+                0
+            }
+            + if wide_sizes {
+                16
+            } else {
+                0
+            }
+            + if wide_offset {
+                8
+            } else {
+                0
+            };
+        if metadata_size > self.limits.max_metadata_bytes - self.central.len() {
+            return Result::Err(failure(ErrorKind::Limit, 0, "ZIP directory metadata limit"))
         }
         let data = zeros(size);
         reader.read_exact(data.as_mut_slice()).map_err(

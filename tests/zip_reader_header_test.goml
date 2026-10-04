@@ -1,0 +1,119 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Compression, Entry, ErrorKind, Header, Limits, ZipWriter};
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn zip_reader_rejects_known_header_errors_without_consuming_retryable_input() -> () {
+    let mut large = "x";
+    for _ in 0..16 {
+        large += large;
+    }
+    let cases = Vec::from_array(
+        [
+            (Header::file(""), ErrorKind::Path),
+            (Header::file("bad\u0000path"), ErrorKind::Path),
+            (Header { link: "bad\u0000link", ..Header::file("file") }, ErrorKind::Path),
+            (Header { modified: -1, ..Header::file("file") }, ErrorKind::Unsupported),
+            (Header { modified: 4294967296, ..Header::file("file") }, ErrorKind::Unsupported),
+            (Header { comment: large, ..Header::file("file") }, ErrorKind::Limit),
+            (Header::file(large), ErrorKind::Limit),
+            (Header::directory("directory"), ErrorKind::Invalid),
+            (Header::symlink("link", "target"), ErrorKind::Invalid),
+        ],
+    );
+    for (header, kind) in cases {
+        for compression in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+            let limits = Limits { max_path_bytes: 100000, ..Limits::standard() };
+            let output = io::Cursor::new(bytes::Bytes::new());
+            let writer = testing::expect_ok(ZipWriter::new(output, limits), "writer");
+            let source = CountedZipSource {
+                cursor: io::Cursor::new(bytes::Bytes::from_string("payload")),
+                calls: Ref::new(0),
+            };
+            let error = testing::expect_err(
+                writer.append_reader(header, 7, source, compression),
+                "invalid header",
+            );
+            testing::assert_eq(error.kind, kind);
+            testing::assert_eq(source.calls.get(), 0);
+            testing::assert_eq(source.cursor.position(), 0);
+            testing::assert_eq(output.bytes().len(), 0);
+            testing::assert_ok(
+                writer.append_reader(Header::file("corrected"), 7, source, compression),
+            );
+            testing::assert_ok(writer.finish(""));
+            let entries = testing::expect_ok(
+                archive::decode_zip(output.bytes(), limits),
+                "corrected header",
+            );
+            testing::assert_eq(entries.len(), 1);
+            testing::assert(entries[0].data.to_vec() == b"payload");
+        }
+    }
+}
+
+#[test]
+fn zip_reader_preflights_the_remaining_metadata_budget() -> () {
+    for force_zip64 in Vec::from_array([false, true]) {
+        for compression in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+            for existing in Vec::from_array([false, true]) {
+                let extra = if force_zip64 {
+                    28
+                } else {
+                    0
+                };
+                let initial_metadata = if existing {
+                    60 + extra
+                } else {
+                    0
+                };
+                let limits = Limits {
+                    max_metadata_bytes: initial_metadata + 61 + extra,
+                    ..Limits::standard(),
+                };
+                let output = io::Cursor::new(bytes::Bytes::new());
+                let writer = testing::expect_ok(
+                    ZipWriter::with_zip64(output, limits, force_zip64),
+                    "writer",
+                );
+                if existing {
+                    testing::assert_ok(
+                        writer.append(Entry::file("first", bytes::Bytes::new()), compression),
+                    );
+                }
+                let before = output.bytes().len();
+                let source = CountedZipSource {
+                    cursor: io::Cursor::new(bytes::Bytes::from_string("payload")),
+                    calls: Ref::new(0),
+                };
+                let error = testing::expect_err(
+                    writer.append_reader(Header::file("payload"), 7, source, compression),
+                    "metadata budget",
+                );
+                testing::assert_eq(error.kind, ErrorKind::Limit);
+                testing::assert_eq(source.calls.get(), 0);
+                testing::assert_eq(source.cursor.position(), 0);
+                testing::assert_eq(output.bytes().len(), before);
+                testing::assert_ok(writer.append_reader(Header::file("a"), 7, source, compression));
+                testing::assert_ok(writer.finish(""));
+                let entries = testing::expect_ok(
+                    archive::decode_zip(output.bytes(), limits),
+                    "shorter name after rejection",
+                );
+                testing::assert_eq(
+                    entries.len(),
+                    if existing {
+                        2
+                    } else {
+                        1
+                    },
+                );
+                testing::assert(entries[entries.len() - 1].data.to_vec() == b"payload");
+            }
+        }
+    }
+}
