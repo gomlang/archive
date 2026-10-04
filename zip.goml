@@ -140,6 +140,9 @@ impl[W: Write] ZipWriter[W] {
         } else {
             entry.header.path
         };
+        if name.byte_len() > self.limits.max_path_bytes {
+            return Result::Err(failure(ErrorKind::Path, 0, "ZIP entry path exceeds limit"))
+        }
         let filename = bytes::Bytes::from_string(name);
         let comment = bytes::Bytes::from_string(entry.header.comment);
         if filename.len() > 65535 || comment.len() > 65535 {

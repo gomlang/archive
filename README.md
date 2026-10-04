@@ -74,6 +74,8 @@ TAR appends include the final two 512-byte end blocks in their archive-budget
 check before writing headers or reading the source. Rejecting an entry that would
 leave insufficient room for `finish` preserves the existing archive and permits
 a smaller entry or completion.
+ZIP directory paths include their automatically appended `/` when checking the
+path-byte limit, so every accepted path fits the same limit when read back.
 
 Generic reads also propagate interruptions immediately without retry. A failing
 read may already have consumed bytes or modified the destination buffer without

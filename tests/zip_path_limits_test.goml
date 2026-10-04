@@ -1,0 +1,65 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{Compression, Entry, EntryKind, ErrorKind, Header, Limits, ZipWriter};
+use std::bytes;
+use std::io;
+use std::testing;
+
+#[test]
+fn zip_directory_suffix_counts_toward_the_serialized_path_limit() -> () {
+    for (name, maximum) in Vec::from_array([("abc", 3), ("é", 2)]) {
+        for force_zip64 in Vec::from_array([false, true]) {
+            for compression in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+                let limits = Limits { max_path_bytes: maximum, ..Limits::standard() };
+                let output = io::Cursor::new(bytes::Bytes::new());
+                let writer = testing::expect_ok(
+                    ZipWriter::with_zip64(output, limits, force_zip64),
+                    "writer",
+                );
+                let error = testing::expect_err(
+                    writer.append(Entry::directory(name), compression),
+                    "serialized directory name exceeds limit",
+                );
+                testing::assert_eq(error.kind, ErrorKind::Path);
+                testing::assert_eq(output.bytes().len(), 0);
+                testing::assert_ok(
+                    writer.append(Entry::file(name, bytes::Bytes::from_string("file")), compression),
+                );
+                testing::assert_ok(writer.finish(""));
+                let entries = testing::expect_ok(
+                    archive::decode_zip(output.bytes(), limits),
+                    "file fits same limit",
+                );
+                testing::assert_eq(entries.len(), 1);
+                testing::assert_eq(entries[0].header.path, name);
+            }
+        }
+    }
+}
+
+#[test]
+fn zip_directory_path_exact_limit_roundtrips_with_or_without_explicit_suffix() -> () {
+    for name in Vec::from_array(["abc", "abc/", "éx", "éx/"]) {
+        let limits = Limits { max_path_bytes: 4, ..Limits::standard() };
+        let output = io::Cursor::new(bytes::Bytes::new());
+        let writer = testing::expect_ok(ZipWriter::new(output, limits), "writer");
+        testing::assert_ok(
+            writer.append_reader(
+                Header::directory(name),
+                0,
+                io::Cursor::new(bytes::Bytes::new()),
+                Compression::Stored,
+            ),
+        );
+        testing::assert_ok(writer.finish(""));
+        let entries = testing::expect_ok(
+            archive::decode_zip(output.bytes(), limits),
+            "directory fits limit",
+        );
+        testing::assert_eq(entries.len(), 1);
+        testing::assert_eq(entries[0].header.kind, EntryKind::Directory);
+        testing::assert_eq(entries[0].header.path.byte_len(), 4);
+        testing::assert(entries[0].header.path.ends_with("/"));
+    }
+}
