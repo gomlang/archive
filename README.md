@@ -231,10 +231,10 @@ permissions are kept traversable while extracting.
 Run from this module:
 
 ```sh
-../../goml-dev/stage2/bin/goml fmt --check
-../../goml-dev/stage2/bin/goml check
-../../goml-dev/stage2/bin/goml test
-GOFLAGS=-race ../../goml-dev/stage2/bin/goml test --target-dir _artifact/race
+goml fmt --check
+goml check
+goml test
+GOFLAGS=-race goml test --target-dir _artifact/race
 ```
 
 Native GoML tests cover Unicode/PAX metadata, CRC vectors, GZIP corruption,
@@ -250,7 +250,7 @@ with `gzip`, exercise concatenated members and optional headers, and reject
 malformed trees and truncated or over-budget data. These four programs must be
 installed. There are no Python helpers.
 The `examples/basic` example builds and reads archive bundles through the public API.
-`goml verify` also tests it through an isolated registry snapshot.
+The ecosystem verifier also tests it using an isolated registry snapshot.
 
 Format references: [PKWARE ZIP APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT),
 [GNU TAR USTAR description](https://www.gnu.org/software/tar/manual/html_node/Standard.html),
@@ -264,12 +264,12 @@ with archive symlinks and parent traversal rejected outright.
 
 ## Development and examples
 
-Requires GoML 0.1.56 or newer. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
+Requires the [current GoML toolchain](https://github.com/gomlang/verification/blob/main/ci/toolchain.json) with unversioned registry support. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
 
 ```sh
 goml run --example basic
 goml test
-goml verify --timeout 300s
+(cd ../verification && just ecosystem-test archive)
 ```
 
-`goml test` builds the example and runs its tests. `goml verify` repeats the example checks as an independent module against an isolated registry snapshot. `(cd ../verification && just ecosystem-test archive)` also retains the library-specific smoke and compatibility checks.
+`goml test` builds the example and runs its tests. `(cd ../verification && just ecosystem-test archive)` runs the library-specific smoke and compatibility checks.

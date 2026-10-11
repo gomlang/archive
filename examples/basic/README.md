@@ -11,4 +11,4 @@ From the library root, run `goml run --example basic` or `goml test --example ba
 Run `(cd ../verification && just ecosystem-test archive)` there to validate the
 library, example and independent downstream snapshot.
 
-This example shares the library root manifest and its dependencies. From the library root, run `goml verify --example basic` to build and test it as an independent downstream module.
+This example shares the library root manifest and its dependencies. From the library root, run `goml test` to build and test the library and its examples.
