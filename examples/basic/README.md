@@ -8,7 +8,7 @@ Both the example and archive library use pure GoML without a `go.mod` or Go
 adapter sources.
 
 From the library root, run `goml run --example basic` or `goml test --example basic`.
-Run `(cd ../verification && just ecosystem-test archive)` there to validate the
+Run `(cd ../workflows && just ecosystem-test archive)` there to validate the
 library, example and independent downstream snapshot.
 
 This example shares the library root manifest and its dependencies. From the library root, run `goml test` to build and test the library and its examples.
