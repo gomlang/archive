@@ -1,0 +1,327 @@
+package archive;
+
+use std::bytes;
+use std::io;
+use io::{Read, Write};
+use ecosystem::compress;
+use ecosystem::compress::flate;
+
+struct ZipStreamSink[W] {
+    archive: ZipWriter[W],
+    problem: Ref[Option[Error]],
+}
+
+impl[W: Write] Write for ZipStreamSink[W] {
+    fn write(self: ZipStreamSink[W], data: Slice[byte]) -> Result[isize, io::Error] {
+        match self.archive.write_bytes(bytes::Bytes::from_slice_copy(data)) {
+            Ok(_) => Result::Ok(data.len()),
+            Err(problem) => {
+                self.problem.set(Option::Some(problem));
+                Result::Err(
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        "ZIP stream",
+                        Option::None,
+                        Option::None,
+                        problem.to_string(),
+                    ),
+                )
+            },
+        }
+    }
+}
+
+impl[W: Write] ZipWriter[W] {
+    pub fn append_stream[R: Read](
+        self: ZipWriter[W],
+        header: Header,
+        reader: R,
+        compression: Compression,
+    ) -> Result[(), Error] {
+        if self.done.get() || self.broken.get() {
+            return Result::Err(failure(ErrorKind::Closed, 0, "ZIP writer closed or failed"))
+        }
+        let (filename, comment, time_extra) = zip_prepare_header(header, 0, self.limits)?;
+        if header.kind != EntryKind::File {
+            return Result::Err(
+                failure(ErrorKind::Unsupported, 0, "streaming ZIP entries must be files"),
+            )
+        }
+        if self.count.get() >= self.limits.max_entries {
+            return Result::Err(failure(ErrorKind::Limit, 0, "ZIP entry count limit"))
+        }
+        let offset = self.position.get();
+        let wide_sizes = self.force_zip64 || self.limits.max_entry_bytes.to_u64() >= 4294967295;
+        let wide_offset = self.force_zip64 || offset.to_u64() >= 4294967295;
+        let wide_entry = wide_sizes || wide_offset;
+        let method: u64 = if compression == Compression::Stored {
+            0
+        } else {
+            8
+        };
+        let local_extra = bytes::Bytes::new();
+        if wide_sizes {
+            put_le(local_extra, 1, 2);
+            put_le(local_extra, 16, 2);
+            put_le(local_extra, 0, 8);
+            put_le(local_extra, 0, 8);
+        }
+        local_extra.extend_from_slice(time_extra.as_slice());
+        let version = if wide_entry {
+            45
+        } else {
+            20
+        };
+        let local = bytes::Bytes::new();
+        put_le(local, 0x04034b50, 4);
+        put_le(local, version, 2);
+        put_le(local, 0x0808, 2);
+        put_le(local, method, 2);
+        put_le(local, 0, 2);
+        put_le(local, 33, 2);
+        put_le(local, 0, 4);
+        put_le(
+            local,
+            if wide_sizes {
+                4294967295
+            } else {
+                0
+            },
+            4,
+        );
+        put_le(
+            local,
+            if wide_sizes {
+                4294967295
+            } else {
+                0
+            },
+            4,
+        );
+        put_le(local, filename.len().to_u64(), 2);
+        put_le(local, local_extra.len().to_u64(), 2);
+        local.extend_from_slice(filename.as_slice());
+        local.extend_from_slice(local_extra.as_slice());
+        self.broken.set(true);
+        self.write_bytes(local)?;
+        let body_start = self.position.get();
+        let problem = Ref::new(Option::None);
+        let sink = ZipStreamSink { archive: self, problem };
+        let encoder = if compression == Compression::Deflate {
+            Option::Some(
+                flate::Encoder::new(
+                    sink,
+                    compress::Limits {
+                        max_input_bytes: self.limits.max_entry_bytes,
+                        max_output_bytes: self.limits.max_archive_bytes - body_start,
+                        max_blocks: 9223372036854775807,
+                        max_work: 9223372036854775807,
+                    },
+                    6,
+                ).map_err(|error| compression_error(error, body_start))?,
+            )
+        } else {
+            Option::None
+        };
+        let buffer = zeros(8192);
+        let mut size = 0;
+        let mut crc: u32 = 0;
+        loop {
+            let count = match reader.read(buffer.as_mut_slice()) {
+                Ok(count) => count,
+                Err(error) => {
+                    return Result::Err(
+                        failure(ErrorKind::Io, self.position.get(), error.to_string()),
+                    )
+                },
+            };
+            if count < 0 || count > buffer.len() {
+                return Result::Err(
+                    failure(ErrorKind::Io, self.position.get(), "invalid source read count"),
+                )
+            }
+            if count == 0 {
+                break
+            }
+            if count > self.limits.max_entry_bytes - size
+                || count > self.limits.max_total_bytes - self.total.get() - size {
+                return Result::Err(
+                    failure(ErrorKind::Limit, self.position.get(), "ZIP streamed entry size limit"),
+                )
+            }
+            size += count;
+            crc = crc32_update(crc, buffer.slice(0, count));
+            if let Some(encoder) = encoder {
+                if let Err(error) = encoder.write_chunk(buffer.slice(0, count)) {
+                    return Result::Err(
+                        problem.get().unwrap_or(compression_error(error, self.position.get())),
+                    )
+                }
+            } else {
+                self.write_bytes(bytes::Bytes::from_slice_copy(buffer.slice(0, count)))?;
+            }
+        }
+        if let Some(encoder) = encoder {
+            if let Err(error) = encoder.finish() {
+                return Result::Err(
+                    problem.get().unwrap_or(compression_error(error, self.position.get())),
+                )
+            }
+        }
+        let packed_size = self.position.get() - body_start;
+        if !wide_sizes && packed_size.to_u64() >= 4294967295 {
+            return Result::Err(
+                failure(
+                    ErrorKind::Limit,
+                    self.position.get(),
+                    "classic ZIP compressed size overflow",
+                ),
+            )
+        }
+        let checksum = crc.to_u64();
+        let descriptor = bytes::Bytes::new();
+        put_le(descriptor, 0x08074b50, 4);
+        put_le(descriptor, checksum, 4);
+        put_le(
+            descriptor,
+            packed_size.to_u64(),
+            if wide_sizes {
+                8
+            } else {
+                4
+            },
+        );
+        put_le(
+            descriptor,
+            size.to_u64(),
+            if wide_sizes {
+                8
+            } else {
+                4
+            },
+        );
+        self.write_bytes(descriptor)?;
+        let central_extra = bytes::Bytes::new();
+        if wide_entry {
+            put_le(central_extra, 1, 2);
+            put_le(
+                central_extra,
+                (if wide_sizes {
+                    16
+                } else {
+                    0
+                })
+                    + (if wide_offset {
+                        8
+                    } else {
+                        0
+                    }),
+                2,
+            );
+            if wide_sizes {
+                put_le(central_extra, size.to_u64(), 8);
+                put_le(central_extra, packed_size.to_u64(), 8);
+            }
+            if wide_offset {
+                put_le(central_extra, offset.to_u64(), 8);
+            }
+        }
+        central_extra.extend_from_slice(time_extra.as_slice());
+        let central = bytes::Bytes::new();
+        put_le(central, 0x02014b50, 4);
+        put_le(
+            central,
+            if wide_entry {
+                0x032d
+            } else {
+                0x0314
+            },
+            2,
+        );
+        put_le(central, version, 2);
+        put_le(central, 0x0808, 2);
+        put_le(central, method, 2);
+        put_le(central, 0, 2);
+        put_le(central, 33, 2);
+        put_le(central, checksum, 4);
+        put_le(
+            central,
+            if wide_sizes {
+                4294967295
+            } else {
+                packed_size.to_u64()
+            },
+            4,
+        );
+        put_le(
+            central,
+            if wide_sizes {
+                4294967295
+            } else {
+                size.to_u64()
+            },
+            4,
+        );
+        put_le(central, filename.len().to_u64(), 2);
+        put_le(central, central_extra.len().to_u64(), 2);
+        put_le(central, comment.len().to_u64(), 2);
+        put_le(central, 0, 2);
+        put_le(central, 0, 2);
+        let mode = match header.kind {
+            File => 0o100000,
+            Directory => 0o040000,
+            Symlink => 0o120000,
+            Hardlink => 0,
+        }
+            | (header.mode & 0o7777);
+        put_le(
+            central,
+            (mode.to_u64() << 16)
+                | if header.kind == EntryKind::Directory {
+                    16
+                } else {
+                    0
+                },
+            4,
+        );
+        put_le(
+            central,
+            if wide_offset {
+                4294967295
+            } else {
+                offset.to_u64()
+            },
+            4,
+        );
+        central.extend_from_slice(filename.as_slice());
+        central.extend_from_slice(central_extra.as_slice());
+        central.extend_from_slice(comment.as_slice());
+        if central.len() > self.limits.max_metadata_bytes - self.central.len() {
+            return Result::Err(
+                failure(ErrorKind::Limit, self.position.get(), "ZIP directory metadata limit"),
+            )
+        }
+        let end_size = if self.force_zip64 || self.count.get() + 1 >= 65535
+            || self.position.get().to_u64() >= 4294967295
+            || (self.central.len() + central.len()).to_u64() >= 4294967295 {
+            98
+        } else {
+            22
+        };
+        if self.central.len().to_u64() + central.len().to_u64() + end_size
+            > (self.limits.max_archive_bytes - self.position.get()).to_u64() {
+            return Result::Err(
+                failure(
+                    ErrorKind::Limit,
+                    self.position.get(),
+                    "ZIP final directory exceeds archive limit",
+                ),
+            )
+        }
+        self.central.extend_from_slice(central.as_slice());
+        self.total.set(self.total.get() + size);
+        self.count.set(self.count.get() + 1);
+        self.broken.set(false);
+        Result::Ok(())
+    }
+}

@@ -1,0 +1,230 @@
+package tests;
+
+use ecosystem::archive;
+use archive::{ZipWriter, Header, Limits, Compression, ErrorKind};
+use std::bytes;
+use std::io;
+use io::{Read, Write};
+use std::testing;
+use std::process;
+use std::fs;
+
+struct PatternReader {
+    position: Ref[isize],
+    length: isize,
+    output: io::Cursor,
+}
+
+impl Read for PatternReader {
+    fn read(self: PatternReader, buffer: MutSlice[byte]) -> Result[isize, io::Error] {
+        testing::assert(buffer.len() <= 8192);
+        testing::assert(self.output.position() > 0);
+        let remaining = self.length - self.position.get();
+        let count = if remaining < buffer.len() {
+            remaining
+        } else {
+            buffer.len()
+        };
+        for i in 0..count {
+            buffer[i] = ((self.position.get() + i) % 251).to_u8();
+        }
+        self.position.set(self.position.get() + count);
+        Result::Ok(count)
+    }
+}
+
+#[test]
+fn streaming_zip_classic_and_zip64_interoperate() -> () {
+    let root = temporary();
+    defer {
+        let _ = fs::remove_dir_all(root);
+    };
+    for wide in Vec::from_array([false, true]) {
+        for method in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+            let output = io::Cursor::new(bytes::Bytes::new());
+            let writer = testing::expect_ok(
+                ZipWriter::with_zip64(output, Limits::standard(), wide),
+                "writer",
+            );
+            let source = PatternReader { position: Ref::new(0), length: 100003, output };
+            testing::expect_ok(
+                writer.append_stream(Header::file("sample"), source, method),
+                "sample stream " + wide.to_string() + method.debug(),
+            );
+            testing::assert_eq(source.position.get(), 100003);
+            testing::expect_ok(
+                writer.append_stream(
+                    Header::file("empty"),
+                    io::Cursor::new(bytes::Bytes::new()),
+                    method,
+                ),
+                "empty stream",
+            );
+            testing::expect_ok(writer.finish("stream"), "finish");
+            let packed = output.bytes();
+            let entries = testing::expect_ok(
+                archive::decode_zip(packed, Limits::standard()),
+                "decode",
+            );
+            testing::assert_eq(entries.len(), 2);
+            testing::assert_eq(entries[0].data.len(), 100003);
+            let _ = fs::remove_file(root + "/stream.zip");
+            testing::expect_ok(archive::write_file(root + "/stream.zip", packed), "write zip");
+            command("unzip", Vec::from_array(["-t", "stream.zip"]), root);
+            let oracle = testing::expect_ok(
+                process::Command::new("go").args(
+                    Vec::from_array(["run", "tests/data/stream_zip_check.go"]),
+                ).input(packed).output_structured(),
+                "Go ZIP oracle",
+            );
+            testing::assert(oracle.status().success());
+        }
+    }
+}
+
+#[test]
+fn streaming_zip_failures_are_terminal() -> () {
+    for method in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+        let output = io::Cursor::new(bytes::Bytes::new());
+        let writer = testing::expect_ok(
+            ZipWriter::new(output, Limits { max_entry_bytes: 5, ..Limits::standard() }),
+            "writer",
+        );
+        testing::assert_eq(
+            testing::expect_err(
+                writer.append_stream(
+                    Header::file("large"),
+                    io::Cursor::new(bytes::Bytes::from_vec(b"123456")),
+                    method,
+                ),
+                "limit",
+            ).kind,
+            ErrorKind::Limit,
+        );
+        testing::assert_eq(
+            testing::expect_err(writer.finish(""), "terminal").kind,
+            ErrorKind::Closed,
+        );
+        testing::assert_eq(
+            testing::expect_err(
+                writer.append_stream(
+                    Header::file("again"),
+                    io::Cursor::new(bytes::Bytes::new()),
+                    method,
+                ),
+                "closed",
+            ).kind,
+            ErrorKind::Closed,
+        );
+        let sink = ShortWriter {
+            output: io::Cursor::new(bytes::Bytes::new()),
+            fail_at: 2,
+            calls: Ref::new(0),
+        };
+        let writer = testing::expect_ok(ZipWriter::new(sink, Limits::standard()), "writer");
+        testing::assert_err(
+            writer.append_stream(
+                Header::file("fault"),
+                io::Cursor::new(bytes::Bytes::from_vec(b"abc")),
+                method,
+            ),
+        );
+        testing::assert_eq(
+            testing::expect_err(writer.finish(""), "write fault terminal").kind,
+            ErrorKind::Closed,
+        );
+    }
+}
+
+struct StreamFaultReader {
+    calls: Ref[isize],
+}
+
+impl Read for StreamFaultReader {
+    fn read(self: StreamFaultReader, output: MutSlice[byte]) -> Result[isize, io::Error] {
+        self.calls.set(self.calls.get() + 1);
+        Result::Err(
+            io::Error::new(
+                io::ErrorKind::Interrupted,
+                "source",
+                Option::None,
+                Option::None,
+                "source failed",
+            ),
+        )
+    }
+}
+
+#[test]
+fn streamed_source_error_and_archive_budget_poison_writer() -> () {
+    for method in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+        let output = io::Cursor::new(bytes::Bytes::new());
+        let writer = testing::expect_ok(ZipWriter::new(output, Limits::standard()), "writer");
+        let source = StreamFaultReader { calls: Ref::new(0) };
+        testing::assert_eq(
+            testing::expect_err(
+                writer.append_stream(Header::file("fault"), source, method),
+                "source error",
+            ).kind,
+            ErrorKind::Io,
+        );
+        testing::assert_eq(source.calls.get(), 1);
+        testing::assert_err(writer.finish(""));
+        let limited = testing::expect_ok(
+            ZipWriter::new(
+                io::Cursor::new(bytes::Bytes::new()),
+                Limits { max_archive_bytes: 45, ..Limits::standard() },
+            ),
+            "limited",
+        );
+        testing::assert_err(
+            limited.append_stream(
+                Header::file("x"),
+                io::Cursor::new(bytes::Bytes::from_vec(b"abcdefghijklmnop")),
+                method,
+            ),
+        );
+        testing::assert_err(limited.finish(""));
+        let short = ShortWriter {
+            output: io::Cursor::new(bytes::Bytes::new()),
+            fail_at: 0,
+            calls: Ref::new(0),
+        };
+        let writer = testing::expect_ok(ZipWriter::new(short, Limits::standard()), "short");
+        testing::expect_ok(
+            writer.append_stream(
+                Header::file("x"),
+                io::Cursor::new(bytes::Bytes::from_vec(b"abc")),
+                method,
+            ),
+            "short writes",
+        );
+        testing::assert_ok(writer.finish(""));
+        testing::assert_eq(
+            testing::expect_ok(
+                archive::decode_zip(short.output.bytes(), Limits::standard()),
+                "short output",
+            )[0].data.len(),
+            3,
+        );
+    }
+}
+
+#[test]
+fn streaming_zip_rejects_file_directory_suffix_before_reading() -> () {
+    for method in Vec::from_array([Compression::Stored, Compression::Deflate]) {
+        let output = io::Cursor::new(bytes::Bytes::new());
+        let writer = testing::expect_ok(ZipWriter::new(output, Limits::standard()), "writer");
+        let source = StreamFaultReader { calls: Ref::new(0) };
+        testing::assert_eq(
+            testing::expect_err(
+                writer.append_stream(Header::file("directory/"), source, method),
+                "file directory suffix",
+            ).kind,
+            ErrorKind::Path,
+        );
+        testing::assert_eq(source.calls.get(), 0);
+        testing::assert_eq(output.position(), 0);
+        testing::assert_ok(writer.finish(""));
+    }
+}

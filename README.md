@@ -273,3 +273,16 @@ goml test
 ```
 
 `goml test` builds the example and runs its tests. `(cd ../workflows && just ecosystem-test archive)` runs the library-specific smoke and compatibility checks.
+
+`ZipWriter.append_stream(header, reader, compression)` writes a file entry from
+`Read` until EOF with an 8 KiB input buffer and the bounded DEFLATE encoder
+window. Stored and Deflate entries use signed data descriptors; unknown sizes
+use classic descriptors when the entry limit permits, otherwise ZIP64 (also
+available with `with_zip64`). Central metadata remains bounded by the existing
+metadata limit. Only file headers are accepted; use `append` for directories
+and links. The writer remains single-owner and cannot be reentered during a
+read callback. Once the local header is attempted, any failure or panic poisons
+the writer; partial output must be discarded, and `finish` returns `Closed`.
+Preflight header failures leave it usable. `append_reader` retains its original
+bounded buffering and failure behavior. Tests verify Go `archive/zip` and
+Info-ZIP interoperability for both methods and both descriptor widths.
