@@ -143,3 +143,34 @@ fn classic_directory_comment_is_not_a_zip64_locator() -> () {
     testing::assert_eq(memory.records()[0].header.comment, entry.header.comment);
     testing::assert_eq(source.records()[0].header.comment, entry.header.comment);
 }
+
+#[test]
+fn zip64_required_fields_do_not_hide_conflicting_classic_fields() -> () {
+    for sentinel in[8, 12, 16] {
+        let valid = optional_zip64_fixture();
+        let end = valid.len() - 22;
+        zip64_set(valid, end + sentinel, 4294967295, 4);
+        check_optional_zip64(valid, "");
+        for conflicting in[8, 12, 16] {
+            if conflicting == sentinel {
+                continue
+            }
+            let invalid = valid.copy();
+            zip64_set(invalid, end + conflicting, 0, 4);
+            testing::assert_eq(
+                testing::expect_err(
+                    ZipArchive::open(invalid, Limits::standard()),
+                    "conflicting classic field",
+                ).kind,
+                ErrorKind::Invalid,
+            );
+            testing::assert_eq(
+                testing::expect_err(
+                    ZipSource::open(io::Cursor::new(invalid), invalid.len(), Limits::standard()),
+                    "conflicting source field",
+                ).kind,
+                ErrorKind::Invalid,
+            );
+        }
+    }
+}
