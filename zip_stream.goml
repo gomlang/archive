@@ -54,6 +54,25 @@ impl[W: Write] ZipWriter[W] {
         let wide_sizes = self.force_zip64 || self.limits.max_entry_bytes.to_u64() >= 4294967295;
         let wide_offset = self.force_zip64 || offset.to_u64() >= 4294967295;
         let wide_entry = wide_sizes || wide_offset;
+        let metadata_size = 46 + filename.len() + comment.len() + time_extra.len()
+            + if wide_entry {
+                4
+            } else {
+                0
+            }
+            + if wide_sizes {
+                16
+            } else {
+                0
+            }
+            + if wide_offset {
+                8
+            } else {
+                0
+            };
+        if metadata_size > self.limits.max_metadata_bytes - self.central.len() {
+            return Result::Err(failure(ErrorKind::Limit, offset, "ZIP directory metadata limit"))
+        }
         let method: u64 = if compression == Compression::Stored {
             0
         } else {
