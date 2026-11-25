@@ -7,6 +7,16 @@ use std::os::linux::abi;
 use std::os::linux::fd;
 use std::os::linux::syscall;
 
+struct DescriptorReader {
+    descriptor: fd::Fd,
+}
+
+impl Read for DescriptorReader {
+    fn read(self: DescriptorReader, buffer: MutSlice[byte]) -> Result[isize, io::Error] {
+        self.descriptor.read(buffer)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum LinkPolicy {
     Reject,
@@ -286,7 +296,9 @@ pub fn read_file(path: string, limit: isize) -> Result[bytes::Bytes, Error] {
     defer {
         let _ = file.close();
     };
-    file.read_to_end(limit).map_err(|error| failure(ErrorKind::Io, 0, error.to_string()))
+    DescriptorReader { descriptor: file }.read_to_end(limit).map_err(
+        |error| failure(ErrorKind::Io, 0, error.to_string()),
+    )
 }
 
 pub fn write_file(path: string, data: bytes::Bytes) -> Result[(), Error] {
